@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Исторические события</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Исторические события</h1>
+            <nav>
+                <a href="#" id="profileLink">Профиль</a>
+            </nav>
+        </header>
+        
+        <main>
+            <div id="map"></div>
+            <div id="eventInfo">
+                <h2>Выберите местоположение и временной период</h2>
+                <p>После регистрации и выбора параметров здесь будет отображаться информация о исторических событиях.</p>
+            </div>
+            <button id="refreshBtn">Обновить событие</button>
+        </main>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
