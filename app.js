@@ -112,6 +112,15 @@ document.addEventListener('DOMContentLoaded', function() {
             throw new Error('Не удалось найти город в Wikidata. Проверьте подключение к интернету и попробуйте снова.');
         }
     }
+    function getYearsForPeriod(period) {
+    const periods = {
+        middle_ages: { start: 500, end: 1500 },      // Средние века
+        renaissance: { start: 1300, end: 1600 },     // Эпоха Возрождения
+        industrial_revolution: { start: 1760, end: 1840 }, // Промышленная революция
+        '20th_century': { start: 1901, end: 2000 }  // XX век
+    };
+    return periods[period] || { start: 1900, end: 2000 }; // По умолчанию XX век
+    }
 
     // Загрузка событий для пользователя
     async function loadUserEvents() {
