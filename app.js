@@ -1,5 +1,4 @@
 document.addEventListener('DOMContentLoaded', function() {
-    // Глобальные переменные
     const APP = {
         map: null,
         currentUser: null,
@@ -7,7 +6,9 @@ document.addEventListener('DOMContentLoaded', function() {
         currentEventIndex: 0,
         isInitialized: false,
         cityWikidataId: null,
-        markers: [] // Добавляем массив для хранения маркеров
+        markers: [],
+        timelineStartYear: 1700,
+        timelineEndYear: 2000
     };
 
     // Инициализация приложения
@@ -16,32 +17,27 @@ document.addEventListener('DOMContentLoaded', function() {
         
         createBaseStructure();
         setupEventHandlers();
+        initTimeline();
         checkAuth();
         APP.isInitialized = true;
     }
 
     // Создание базовой структуры страницы
     function createBaseStructure() {
-        // Создаем окно авторизации
         createAuthModal();
-        
-        // Создаем окно профиля
         createProfileModal();
-        
-        // Инициализируем карту
         initMap();
     }
 
     // Инициализация карты
     function initMap() {
         try {
-            APP.map = L.map('map').setView([55.7558, 37.6176], 5);
+            APP.map = L.map('map').setView([59.9343, 30.3351], 12); // Центр на Санкт-Петербурге
             
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             }).addTo(APP.map);
             
-            // Если пользователь уже авторизован, загружаем события
             if (APP.currentUser) {
                 loadUserEvents();
             }
@@ -54,20 +50,101 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // Инициализация таймлайна
+    function initTimeline() {
+        const timeline = document.querySelector('.timeline');
+        const startHandle = document.querySelector('.start-handle');
+        const endHandle = document.querySelector('.end-handle');
+        const startYearElement = document.getElementById('startYear');
+        const endYearElement = document.getElementById('endYear');
+        
+        let isDragging = false;
+        let activeHandle = null;
+        
+        function updateYears() {
+            const timelineWidth = timeline.offsetWidth;
+            const startPercent = (parseInt(startHandle.style.left) || 0) / timelineWidth * 100;
+            const endPercent = (parseInt(endHandle.style.left) || timelineWidth) / timelineWidth * 100;
+            
+            const minYear = 1500;
+            const maxYear = new Date().getFullYear();
+            
+            const startYear = Math.round(minYear + (maxYear - minYear) * (startPercent / 100));
+            const endYear = Math.round(minYear + (maxYear - minYear) * (endPercent / 100));
+            
+            startYearElement.textContent = startYear;
+            endYearElement.textContent = endYear;
+            
+            APP.timelineStartYear = startYear;
+            APP.timelineEndYear = endYear;
+        }
+        
+        function moveHandle(handle, position) {
+            const timelineWidth = timeline.offsetWidth;
+            const handleWidth = handle.offsetWidth;
+            const minPosition = 0;
+            const maxPosition = timelineWidth - handleWidth;
+            
+            let newPosition = position - timeline.getBoundingClientRect().left - (handleWidth / 2);
+            newPosition = Math.max(minPosition, Math.min(newPosition, maxPosition));
+            
+            if (handle === startHandle) {
+                const endPosition = parseInt(endHandle.style.left) || maxPosition;
+                newPosition = Math.min(newPosition, endPosition - handleWidth);
+            } else {
+                const startPosition = parseInt(startHandle.style.left) || 0;
+                newPosition = Math.max(newPosition, startPosition + handleWidth);
+            }
+            
+            handle.style.left = `${newPosition}px`;
+            updateYears();
+        }
+        
+        // Инициализация позиций
+        startHandle.style.left = '0px';
+        endHandle.style.left = (timeline.offsetWidth - endHandle.offsetWidth) + 'px';
+        updateYears();
+        
+        // Обработчики событий для ручек
+        [startHandle, endHandle].forEach(handle => {
+            handle.addEventListener('mousedown', function(e) {
+                isDragging = true;
+                activeHandle = this;
+                e.preventDefault();
+            });
+        });
+        
+        document.addEventListener('mousemove', function(e) {
+            if (!isDragging || !activeHandle) return;
+            moveHandle(activeHandle, e.clientX);
+        });
+        
+        document.addEventListener('mouseup', function() {
+            isDragging = false;
+            activeHandle = null;
+        });
+        
+        timeline.addEventListener('click', function(e) {
+            const rect = this.getBoundingClientRect();
+            const position = e.clientX - rect.left;
+            const middle = (parseInt(startHandle.style.left) + parseInt(endHandle.style.left)) / 2;
+            
+            if (position < middle) {
+                moveHandle(startHandle, e.clientX);
+            } else {
+                moveHandle(endHandle, e.clientX);
+            }
+        });
+    }
+
     // Проверка авторизации
     function checkAuth() {
         try {
             const savedUser = localStorage.getItem('currentUser');
             if (savedUser) {
                 APP.currentUser = JSON.parse(savedUser);
-                if (!APP.currentUser || typeof APP.currentUser !== 'object') {
-                    throw new Error('Invalid user data');
-                }
-                
-                // Пытаемся найти Wikidata ID для города
-                findCityWikidataId(APP.currentUser.city)
-                    .then(() => loadUserEvents())
-                    .catch(() => showAuthModal());
+                document.getElementById('cityInput').value = APP.currentUser.city || 'Санкт-Петербург';
+                loadUserEvents();
             } else {
                 showAuthModal();
             }
@@ -112,38 +189,28 @@ document.addEventListener('DOMContentLoaded', function() {
             throw new Error('Не удалось найти город в Wikidata. Проверьте подключение к интернету и попробуйте снова.');
         }
     }
-    function getYearsForPeriod(period) {
-    const periods = {
-        middle_ages: { start: 500, end: 1500 },      // Средние века
-        renaissance: { start: 1300, end: 1600 },     // Эпоха Возрождения
-        industrial_revolution: { start: 1760, end: 1840 }, // Промышленная революция
-        '20th_century': { start: 1901, end: 2000 }  // XX век
-    };
-    return periods[period] || { start: 1900, end: 2000 }; // По умолчанию XX век
-    }
 
     // Загрузка событий для пользователя
     async function loadUserEvents() {
-        if (!APP.currentUser || !APP.cityWikidataId) return;
+        if (!APP.cityWikidataId) return;
         
         try {
             showLoading(true);
             
-            // Получаем временной период в годах
-            const years = getYearsForPeriod(APP.currentUser.timePeriod);
-            
-            // Загружаем события
-            const events = await fetchHistoricalEvents(years.start, years.end);
+            const events = await fetchHistoricalEvents(APP.timelineStartYear, APP.timelineEndYear);
             
             if (events.length > 0) {
                 APP.currentEvents = events;
                 APP.currentEventIndex = 0;
                 displayEvents();
+                updateEventsList();
             } else {
                 document.getElementById('eventInfo').innerHTML = `
                     <h2>События не найдены</h2>
-                    <p>Попробуйте изменить временной период в настройках профиля.</p>
+                    <p>Попробуйте изменить временной период или город.</p>
                 `;
+                document.getElementById('eventsListContainer').innerHTML = '';
+                document.getElementById('eventsCount').textContent = '0';
             }
         } catch (error) {
             console.error('Error loading events:', error);
@@ -175,7 +242,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     SERVICE wikibase:label { bd:serviceParam wikibase:language "ru". }
                 }
                 ORDER BY ?date
-                LIMIT 20`;
+                LIMIT 100`;
             
             const url = `https://query.wikidata.org/sparql?query=${encodeURIComponent(query)}&format=json`;
             
@@ -191,13 +258,13 @@ document.addEventListener('DOMContentLoaded', function() {
             
             return data.results.bindings.map(item => {
                 const date = new Date(item.date.value);
-                const coord = item.coord.value.replace('Point(', '').replace(')', '').split(' ');
+                const coord = item.coord?.value;
                 
                 return {
                     title: item.eventLabel.value,
                     description: item.description?.value || 'Описание отсутствует',
                     date: date.toLocaleDateString('ru-RU'),
-                    coordinates: [parseFloat(coord[1]), parseFloat(coord[0])],
+                    coordinates: coord ? parseCoordinates(coord) : null,
                     wikidataUrl: item.event.value
                 };
             });
@@ -207,16 +274,33 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // Парсинг координат
+    function parseCoordinates(coordString) {
+        if (!coordString) return null;
+        
+        try {
+            const matches = coordString.match(/Point\(([-\d.]+) ([-\d.]+)\)/);
+            if (matches && matches.length === 3) {
+                const longitude = parseFloat(matches[1]);
+                const latitude = parseFloat(matches[2]);
+                return [latitude, longitude];
+            }
+        } catch (e) {
+            console.error("Ошибка парсинга координат:", e);
+        }
+        return null;
+    }
+
     // Отображение событий на карте
     function displayEvents() {
         if (!APP.map || APP.currentEvents.length === 0) return;
         
-        // Очищаем предыдущие маркеры
         APP.markers.forEach(marker => marker.remove());
         APP.markers = [];
         
-        // Добавляем новые маркеры
-        APP.currentEvents.forEach((event, index) => {
+        const eventsWithCoords = APP.currentEvents.filter(event => event.coordinates !== null);
+        
+        eventsWithCoords.forEach((event, index) => {
             const marker = L.marker(event.coordinates).addTo(APP.map)
                 .bindPopup(`<b>${event.title}</b><br>${event.date}`);
             
@@ -224,15 +308,52 @@ document.addEventListener('DOMContentLoaded', function() {
             
             if (index === APP.currentEventIndex) {
                 marker.openPopup();
-                displayEventInfo(event);
             }
         });
         
-        // Центрируем карту на текущем событии
-        APP.map.setView(
-            APP.currentEvents[APP.currentEventIndex].coordinates, 
-            12
-        );
+        if (eventsWithCoords.length > 0) {
+            const currentEvent = eventsWithCoords[APP.currentEventIndex % eventsWithCoords.length];
+            APP.map.setView(currentEvent.coordinates, 12);
+            displayEventInfo(currentEvent);
+        } else if (APP.currentEvents.length > 0) {
+            displayEventInfo(APP.currentEvents[0]);
+        }
+    }
+
+    // Обновление списка событий
+    function updateEventsList() {
+        const container = document.getElementById('eventsListContainer');
+        const countElement = document.getElementById('eventsCount');
+        
+        if (!container || !countElement) return;
+        
+        container.innerHTML = '';
+        countElement.textContent = APP.currentEvents.length;
+        
+        APP.currentEvents.forEach((event, index) => {
+            const eventElement = document.createElement('div');
+            eventElement.className = 'event-item';
+            eventElement.innerHTML = `
+                <h4>${event.title}</h4>
+                <p>${event.date}</p>
+                ${event.coordinates ? '' : '<p class="no-coords">(нет координат)</p>'}
+            `;
+            
+            eventElement.addEventListener('click', () => {
+                APP.currentEventIndex = index;
+                if (event.coordinates) {
+                    APP.map.setView(event.coordinates, 12);
+                    const marker = APP.markers.find(m => 
+                        m.getLatLng().lat === event.coordinates[0] && 
+                        m.getLatLng().lng === event.coordinates[1]
+                    );
+                    if (marker) marker.openPopup();
+                }
+                displayEventInfo(event);
+            });
+            
+            container.appendChild(eventElement);
+        });
     }
 
     // Отображение информации о событии
@@ -241,17 +362,10 @@ document.addEventListener('DOMContentLoaded', function() {
         eventInfoElement.innerHTML = `
             <h2>${event.title}</h2>
             <p><strong>Дата:</strong> ${event.date}</p>
+            ${event.coordinates ? '' : '<p class="no-coords-info">⚠️ Это событие произошло в указанном городе, но точные координаты неизвестны</p>'}
             <p>${event.description}</p>
             <a href="${event.wikidataUrl}" target="_blank" rel="noopener noreferrer">Подробнее на Wikidata</a>
         `;
-    }
-
-    // Обновление события
-    function updateEvent() {
-        if (APP.currentEvents.length === 0) return;
-        
-        APP.currentEventIndex = (APP.currentEventIndex + 1) % APP.currentEvents.length;
-        displayEvents();
     }
 
     // Создание модального окна авторизации
@@ -269,13 +383,11 @@ document.addEventListener('DOMContentLoaded', function() {
         const form = document.createElement('form');
         form.id = 'registrationForm';
         
-        // Поля формы
         const fields = [
             { id: 'firstName', label: 'Имя:', type: 'text' },
             { id: 'lastName', label: 'Фамилия:', type: 'text' },
             { id: 'email', label: 'Email:', type: 'email' },
-            { id: 'password', label: 'Пароль:', type: 'password' },
-            { id: 'city', label: 'Город:', type: 'text' }
+            { id: 'password', label: 'Пароль:', type: 'password' }
         ];
         
         fields.forEach(field => {
@@ -296,37 +408,6 @@ document.addEventListener('DOMContentLoaded', function() {
             form.appendChild(formGroup);
         });
         
-        // Поле временного периода
-        const timePeriodGroup = document.createElement('div');
-        timePeriodGroup.className = 'form-group';
-        
-        const timePeriodLabel = document.createElement('label');
-        timePeriodLabel.setAttribute('for', 'timePeriod');
-        timePeriodLabel.textContent = 'Интересующий временной период:';
-        
-        const timePeriodSelect = document.createElement('select');
-        timePeriodSelect.id = 'timePeriod';
-        timePeriodSelect.required = true;
-        
-        const periods = [
-            { value: 'middle_ages', text: 'Средние века' },
-            { value: 'renaissance', text: 'Эпоха Возрождения' },
-            { value: 'industrial_revolution', text: 'Промышленная революция' },
-            { value: '20th_century', text: 'XX век' }
-        ];
-        
-        periods.forEach(period => {
-            const option = document.createElement('option');
-            option.value = period.value;
-            option.textContent = period.text;
-            timePeriodSelect.appendChild(option);
-        });
-        
-        timePeriodGroup.appendChild(timePeriodLabel);
-        timePeriodGroup.appendChild(timePeriodSelect);
-        form.appendChild(timePeriodGroup);
-        
-        // Кнопка отправки
         const submitBtn = document.createElement('button');
         submitBtn.type = 'submit';
         submitBtn.textContent = 'Зарегистрироваться';
@@ -339,25 +420,14 @@ document.addEventListener('DOMContentLoaded', function() {
         document.body.appendChild(authContainer);
     }
 
-    // Показать модальное окно авторизации
-    function showAuthModal() {
-        document.getElementById('authContainer').style.display = 'flex';
-    }
-
-    // Скрыть модальное окно авторизации
-    function hideAuthModal() {
-        document.getElementById('authContainer').style.display = 'none';
-    }
-
     // Создание модального окна профиля
     function createProfileModal() {
         const profileContainer = document.createElement('div');
-        profileContainer.className = 'auth-container';
+        profileContainer.className = 'profile-container';
         profileContainer.id = 'profileContainer';
-        profileContainer.style.display = 'none';
         
         const profileForm = document.createElement('div');
-        profileForm.className = 'auth-form';
+        profileForm.className = 'profile-form';
         
         const profileTitle = document.createElement('h2');
         profileTitle.textContent = 'Профиль';
@@ -365,11 +435,10 @@ document.addEventListener('DOMContentLoaded', function() {
         const form = document.createElement('form');
         form.id = 'profileForm';
         
-        // Поля формы
         const fields = [
             { id: 'profileFirstName', label: 'Имя:', type: 'text' },
             { id: 'profileLastName', label: 'Фамилия:', type: 'text' },
-            { id: 'profileCity', label: 'Город:', type: 'text' }
+            { id: 'profileEmail', label: 'Email:', type: 'email' }
         ];
         
         fields.forEach(field => {
@@ -390,43 +459,11 @@ document.addEventListener('DOMContentLoaded', function() {
             form.appendChild(formGroup);
         });
         
-        // Поле временного периода
-        const timePeriodGroup = document.createElement('div');
-        timePeriodGroup.className = 'form-group';
-        
-        const timePeriodLabel = document.createElement('label');
-        timePeriodLabel.setAttribute('for', 'profileTimePeriod');
-        timePeriodLabel.textContent = 'Интересующий временной период:';
-        
-        const timePeriodSelect = document.createElement('select');
-        timePeriodSelect.id = 'profileTimePeriod';
-        timePeriodSelect.required = true;
-        
-        const periods = [
-            { value: 'middle_ages', text: 'Средние века' },
-            { value: 'renaissance', text: 'Эпоха Возрождения' },
-            { value: 'industrial_revolution', text: 'Промышленная революция' },
-            { value: '20th_century', text: 'XX век' }
-        ];
-        
-        periods.forEach(period => {
-            const option = document.createElement('option');
-            option.value = period.value;
-            option.textContent = period.text;
-            timePeriodSelect.appendChild(option);
-        });
-        
-        timePeriodGroup.appendChild(timePeriodLabel);
-        timePeriodGroup.appendChild(timePeriodSelect);
-        form.appendChild(timePeriodGroup);
-        
-        // Кнопка отправки
         const submitBtn = document.createElement('button');
         submitBtn.type = 'submit';
         submitBtn.textContent = 'Сохранить изменения';
         form.appendChild(submitBtn);
         
-        // Кнопки выхода и закрытия
         const logoutBtn = document.createElement('button');
         logoutBtn.id = 'logoutBtn';
         logoutBtn.textContent = 'Выйти';
@@ -444,14 +481,23 @@ document.addEventListener('DOMContentLoaded', function() {
         document.body.appendChild(profileContainer);
     }
 
+    // Показать модальное окно авторизации
+    function showAuthModal() {
+        document.getElementById('authContainer').style.display = 'flex';
+    }
+
+    // Скрыть модальное окно авторизации
+    function hideAuthModal() {
+        document.getElementById('authContainer').style.display = 'none';
+    }
+
     // Показать профиль
     function showProfile() {
         if (!APP.currentUser) return;
         
-        document.getElementById('profileFirstName').value = APP.currentUser.firstName;
-        document.getElementById('profileLastName').value = APP.currentUser.lastName;
-        document.getElementById('profileCity').value = APP.currentUser.city;
-        document.getElementById('profileTimePeriod').value = APP.currentUser.timePeriod;
+        document.getElementById('profileFirstName').value = APP.currentUser.firstName || '';
+        document.getElementById('profileLastName').value = APP.currentUser.lastName || '';
+        document.getElementById('profileEmail').value = APP.currentUser.email || '';
         
         document.getElementById('profileContainer').style.display = 'flex';
     }
@@ -463,7 +509,6 @@ document.addEventListener('DOMContentLoaded', function() {
         APP.cityWikidataId = null;
         localStorage.removeItem('currentUser');
         
-        // Очищаем маркеры
         APP.markers.forEach(marker => marker.remove());
         APP.markers = [];
         
@@ -487,8 +532,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 lastName: document.getElementById('lastName').value,
                 email: document.getElementById('email').value,
                 password: document.getElementById('password').value,
-                city: document.getElementById('city').value,
-                timePeriod: document.getElementById('timePeriod').value
+                city: document.getElementById('cityInput').value || 'Санкт-Петербург'
             };
             
             try {
@@ -510,6 +554,41 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
         
+        // Обработчик кнопки применения настроек
+        document.getElementById('applySettingsBtn').addEventListener('click', async function() {
+            const city = document.getElementById('cityInput').value;
+            
+            if (!city) {
+                alert('Пожалуйста, введите город');
+                return;
+            }
+            
+            try {
+                showLoading(true);
+                const cityFound = await findCityWikidataId(city);
+                
+                if (cityFound) {
+                    if (!APP.currentUser) {
+                        APP.currentUser = {
+                            city: city
+                        };
+                    } else {
+                        APP.currentUser.city = city;
+                    }
+                    
+                    localStorage.setItem('currentUser', JSON.stringify(APP.currentUser));
+                    await loadUserEvents();
+                } else {
+                    alert('Не удалось найти указанный город в Wikidata. Попробуйте другое название.');
+                }
+            } catch (error) {
+                console.error('Error applying settings:', error);
+                alert('Ошибка: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        });
+        
         // Обработчик профиля
         document.getElementById('profileLink')?.addEventListener('click', function(e) {
             e.preventDefault();
@@ -517,31 +596,15 @@ document.addEventListener('DOMContentLoaded', function() {
         });
         
         // Обработчик обновления профиля
-        document.getElementById('profileForm')?.addEventListener('submit', async function(e) {
+        document.getElementById('profileForm')?.addEventListener('submit', function(e) {
             e.preventDefault();
             
             APP.currentUser.firstName = document.getElementById('profileFirstName').value;
             APP.currentUser.lastName = document.getElementById('profileLastName').value;
-            APP.currentUser.city = document.getElementById('profileCity').value;
-            APP.currentUser.timePeriod = document.getElementById('profileTimePeriod').value;
+            APP.currentUser.email = document.getElementById('profileEmail').value;
             
-            try {
-                showLoading(true);
-                const cityFound = await findCityWikidataId(APP.currentUser.city);
-                
-                if (cityFound) {
-                    localStorage.setItem('currentUser', JSON.stringify(APP.currentUser));
-                    document.getElementById('profileContainer').style.display = 'none';
-                    loadUserEvents();
-                } else {
-                    alert('Не удалось найти указанный город в Wikidata. Попробуйте другое название.');
-                }
-            } catch (error) {
-                console.error('Profile update error:', error);
-                alert('Ошибка обновления профиля: ' + error.message);
-            } finally {
-                showLoading(false);
-            }
+            localStorage.setItem('currentUser', JSON.stringify(APP.currentUser));
+            document.getElementById('profileContainer').style.display = 'none';
         });
         
         // Обработчики кнопок
@@ -549,23 +612,17 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('closeProfileBtn')?.addEventListener('click', function() {
             document.getElementById('profileContainer').style.display = 'none';
         });
-        document.getElementById('refreshBtn')?.addEventListener('click', updateEvent);
     }
 
     // Показать/скрыть индикатор загрузки
     function showLoading(show) {
         const buttons = document.querySelectorAll('button');
         buttons.forEach(btn => {
-            if (show) {
-                btn.disabled = true;
-                if (btn.id === 'refreshBtn') {
-                    btn.innerHTML = '<span class="loading"></span>';
-                }
-            } else {
-                btn.disabled = false;
-                if (btn.id === 'refreshBtn') {
-                    btn.textContent = 'Обновить событие';
-                }
+            btn.disabled = show;
+            if (btn.id === 'applySettingsBtn' && show) {
+                btn.innerHTML = '<span class="loading"></span>';
+            } else if (btn.id === 'applySettingsBtn') {
+                btn.textContent = 'Применить';
             }
         });
     }
