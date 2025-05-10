@@ -7,14 +7,14 @@ document.addEventListener('DOMContentLoaded', function() {
         isInitialized: false,
         cityWikidataId: null,
         markers: [],
-        timelineStartYear: 1000,
+        timelineStartYear: 1700,
         timelineEndYear: 2000
     };
 
     // Инициализация приложения
     function init() {
         if (APP.isInitialized) return;
-        
+
         createBaseStructure();
         setupEventHandlers();
         initTimeline();
@@ -33,11 +33,11 @@ document.addEventListener('DOMContentLoaded', function() {
     function initMap() {
         try {
             APP.map = L.map('map').setView([59.9343, 30.3351], 12); // Центр на Санкт-Петербурге
-            
+
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             }).addTo(APP.map);
-            
+
             if (APP.currentUser) {
                 loadUserEvents();
             }
@@ -57,37 +57,37 @@ document.addEventListener('DOMContentLoaded', function() {
         const endHandle = document.querySelector('.end-handle');
         const startYearElement = document.getElementById('startYear');
         const endYearElement = document.getElementById('endYear');
-        
+
         let isDragging = false;
         let activeHandle = null;
-        
+
         function updateYears() {
             const timelineWidth = timeline.offsetWidth;
             const startPercent = (parseInt(startHandle.style.left) || 0) / timelineWidth * 100;
             const endPercent = (parseInt(endHandle.style.left) || timelineWidth) / timelineWidth * 100;
-            
+
             const minYear = 1000;
             const maxYear = new Date().getFullYear();
-            
+
             const startYear = Math.round(minYear + (maxYear - minYear) * (startPercent / 100));
             const endYear = Math.round(minYear + (maxYear - minYear) * (endPercent / 100));
-            
+
             startYearElement.textContent = startYear;
             endYearElement.textContent = endYear;
-            
+
             APP.timelineStartYear = startYear;
             APP.timelineEndYear = endYear;
         }
-        
+
         function moveHandle(handle, position) {
             const timelineWidth = timeline.offsetWidth;
             const handleWidth = handle.offsetWidth;
             const minPosition = 0;
             const maxPosition = timelineWidth - handleWidth;
-            
+
             let newPosition = position - timeline.getBoundingClientRect().left - (handleWidth / 2);
             newPosition = Math.max(minPosition, Math.min(newPosition, maxPosition));
-            
+
             if (handle === startHandle) {
                 const endPosition = parseInt(endHandle.style.left) || maxPosition;
                 newPosition = Math.min(newPosition, endPosition - handleWidth);
@@ -95,44 +95,80 @@ document.addEventListener('DOMContentLoaded', function() {
                 const startPosition = parseInt(startHandle.style.left) || 0;
                 newPosition = Math.max(newPosition, startPosition + handleWidth);
             }
-            
+
             handle.style.left = `${newPosition}px`;
             updateYears();
         }
-        
+
         // Инициализация позиций
         startHandle.style.left = '0px';
         endHandle.style.left = (timeline.offsetWidth - endHandle.offsetWidth) + 'px';
         updateYears();
-        
+
         // Обработчики событий для ручек
         [startHandle, endHandle].forEach(handle => {
+            // Mouse events
             handle.addEventListener('mousedown', function(e) {
                 isDragging = true;
                 activeHandle = this;
                 e.preventDefault();
             });
+
+            // Touch events
+            handle.addEventListener('touchstart', function(e) {
+                isDragging = true;
+                activeHandle = this;
+                e.preventDefault();
+            });
         });
-        
+
+        // Mouse move
         document.addEventListener('mousemove', function(e) {
             if (!isDragging || !activeHandle) return;
             moveHandle(activeHandle, e.clientX);
         });
-        
+
+        // Touch move
+        document.addEventListener('touchmove', function(e) {
+            if (!isDragging || !activeHandle) return;
+            moveHandle(activeHandle, e.touches[0].clientX);
+        });
+
+        // Mouse up
         document.addEventListener('mouseup', function() {
             isDragging = false;
             activeHandle = null;
         });
-        
+
+        // Touch end
+        document.addEventListener('touchend', function() {
+            isDragging = false;
+            activeHandle = null;
+        });
+
+        // Click/tap on timeline
         timeline.addEventListener('click', function(e) {
             const rect = this.getBoundingClientRect();
             const position = e.clientX - rect.left;
             const middle = (parseInt(startHandle.style.left) + parseInt(endHandle.style.left)) / 2;
-            
+
             if (position < middle) {
                 moveHandle(startHandle, e.clientX);
             } else {
                 moveHandle(endHandle, e.clientX);
+            }
+        });
+
+        // Touch on timeline
+        timeline.addEventListener('touchstart', function(e) {
+            const rect = this.getBoundingClientRect();
+            const position = e.touches[0].clientX - rect.left;
+            const middle = (parseInt(startHandle.style.left) + parseInt(endHandle.style.left)) / 2;
+
+            if (position < middle) {
+                moveHandle(startHandle, e.touches[0].clientX);
+            } else {
+                moveHandle(endHandle, e.touches[0].clientX);
             }
         });
     }
