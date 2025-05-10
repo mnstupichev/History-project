@@ -360,24 +360,45 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начинает процесс подписки на ежедневные события."""
-    user = update.effective_user
+    # Определяем, откуда пришел запрос
+    if update.callback_query:
+        user = update.callback_query.from_user
+        message = update.callback_query.message
+    else:
+        user = update.effective_user
+        message = update.message
+
     if user.id in subscribers:
         current_time = subscribers[user.id].get('time', time(10, 0))
-        await update.message.reply_text(
-            "Вы уже подписаны на ежедневные события!\n"
-            f"Время получения: {current_time.hour:02d}:00\n"
-            "Используйте /unsubscribe для отмены подписки.",
-            reply_markup=main_menu_keyboard()
-        )
+        if update.callback_query:
+            await update.callback_query.edit_message_text(
+                "Вы уже подписаны на ежедневные события!\n"
+                f"Время получения: {current_time.hour:02d}:00\n"
+                "Используйте /unsubscribe для отмены подписки.",
+                reply_markup=main_menu_keyboard()
+            )
+        else:
+            await message.reply_text(
+                "Вы уже подписаны на ежедневные события!\n"
+                f"Время получения: {current_time.hour:02d}:00\n"
+                "Используйте /unsubscribe для отмены подписки.",
+                reply_markup=main_menu_keyboard()
+            )
         return MAIN_MENU
 
     # Сохраняем начальное время в контексте пользователя
     context.user_data['temp_hour'] = 10
 
-    await update.message.reply_text(
-        "Выберите время, в которое хотите получать ежедневные события:",
-        reply_markup=time_slider_keyboard(10)
-    )
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            "Выберите время, в которое хотите получать ежедневные события:",
+            reply_markup=time_slider_keyboard(10)
+        )
+    else:
+        await message.reply_text(
+            "Выберите время, в которое хотите получать ежедневные события:",
+            reply_markup=time_slider_keyboard(10)
+        )
     return SELECT_TIME
 
 
