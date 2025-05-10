@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', function() {
         markers: [],
         timelineStartYear: 1000,
         timelineEndYear: 2000,
+        hasProcessedUrlParams: false,
         defaultEvent: {
             title: "Основание Санкт-Петербурга",
             description: "27 мая 1703 года был основан город Санкт-Петербург. В этот день на Заячьем острове была заложена Петропавловская крепость, что считается официальной датой основания города.",
@@ -31,7 +32,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Функция для отображения события из URL
     function displayEventFromUrl() {
         const params = getUrlParams();
-        if (!params.event || !params.date || !params.city) {
+        if (!params.event || !params.date || !params.city || APP.hasProcessedUrlParams) {
             return false;
         }
 
@@ -75,6 +76,8 @@ document.addEventListener('DOMContentLoaded', function() {
         // Обновление информации о событии
         displayEventInfo(event);
         updateEventsList();
+
+        APP.hasProcessedUrlParams = true; // Помечаем, что параметры обработаны
         return true;
     }
 
@@ -677,21 +680,50 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Выход из системы
     function logout() {
+        // Очищаем данные пользователя
         APP.currentUser = null;
         APP.currentEvents = [];
         APP.cityWikidataId = null;
         localStorage.removeItem('currentUser');
 
+        // Очищаем маркеры на карте
         APP.markers.forEach(marker => marker.remove());
         APP.markers = [];
 
-        document.getElementById('profileContainer').style.display = 'none';
-        document.getElementById('authContainer').style.display = 'flex';
-
+        // Очищаем информацию о событии
         document.getElementById('eventInfo').innerHTML = `
             <h2>Выберите местоположение и временной период</h2>
             <p>После регистрации и выбора параметров здесь будет отображаться информация о исторических событиях.</p>
         `;
+
+        // Очищаем список событий
+        document.getElementById('eventsListContainer').innerHTML = '';
+        document.getElementById('eventsCount').textContent = '0';
+
+        // Сбрасываем временной промежуток
+        APP.timelineStartYear = 1000;
+        APP.timelineEndYear = 2000;
+
+        // Скрываем профиль и показываем форму авторизации
+        document.getElementById('profileContainer').style.display = 'none';
+        document.getElementById('authContainer').style.display = 'flex';
+
+        // Очищаем поле ввода города
+        document.getElementById('cityInput').value = '';
+
+        // Сбрасываем позиции таймлайна
+        const startHandle = document.querySelector('.start-handle');
+        const endHandle = document.querySelector('.end-handle');
+        const timeline = document.querySelector('.timeline');
+
+        if (startHandle && endHandle && timeline) {
+            startHandle.style.left = '0px';
+            endHandle.style.left = (timeline.offsetWidth - endHandle.offsetWidth) + 'px';
+
+            // Обновляем отображение годов
+            document.getElementById('startYear').textContent = APP.timelineStartYear;
+            document.getElementById('endYear').textContent = APP.timelineEndYear;
+        }
     }
 
     // Настройка обработчиков событий
@@ -713,15 +745,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 localStorage.setItem('currentUser', JSON.stringify(APP.currentUser));
                 hideAuthModal();
 
-                // Проверяем, есть ли событие в URL
-                const params = getUrlParams();
-                if (params.event && params.date && params.city) {
-                    // Если есть параметры из Telegram, показываем событие
-                    displayEventFromUrl();
-                } else {
-                    // Иначе загружаем все события
-                    loadUserEvents();
-                }
+                // Всегда загружаем события для выбранного города, игнорируя параметры URL
+                await loadUserEvents();
             } catch (error) {
                 console.error('Registration error:', error);
                 alert('Ошибка регистрации: ' + error.message);
@@ -757,21 +782,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Сбрасываем cityWikidataId, чтобы он был получен заново
                 APP.cityWikidataId = null;
 
-                // Проверяем, есть ли событие в URL
-                const params = getUrlParams();
-                if (params.event && params.date && params.city) {
-                    const cityFromUrl = decodeURIComponent(params.city);
-                    if (city === cityFromUrl) {
-                        // Если город совпадает с городом из URL, показываем событие
-                        displayEventFromUrl();
-                    } else {
-                        // Если город отличается, загружаем все события для нового города
-                        await loadUserEvents();
-                    }
-                } else {
-                    // Если нет параметров из URL, загружаем все события
-                    await loadUserEvents();
-                }
+                // Всегда загружаем события для выбранного города, игнорируя параметры URL
+                await loadUserEvents();
             } catch (error) {
                 console.error('Error applying settings:', error);
                 alert('Ошибка: ' + error.message);
