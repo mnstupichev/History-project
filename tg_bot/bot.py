@@ -36,12 +36,12 @@ ERA_RANGES = {
 }
 
 # Состояния диалога
-MAIN_MENU, SELECT_CITY, SELECT_ERA = range(3)
+MAIN_MENU, SELECT_CITY, SELECT_ERA, SELECT_TIME = range(4)
 
 # Данные пользователей
 user_data: Dict[int, Dict] = {}
 
-# Добавляем словарь для хранения подписчиков
+# Добавляем словарь для хранения подписчиков с их временем
 subscribers: Dict[int, Dict] = {}
 
 
@@ -71,7 +71,7 @@ async def get_events_from_wikidata(city_id: str, era: str, exclude_events: Set[s
     """Получает исторические события из Wikidata."""
     try:
         range_data = ERA_RANGES[era]
-        
+
         # SPARQL запрос для получения исторических событий
         query = f"""
                 SELECT ?event ?eventLabel ?date ?description WHERE {{
@@ -86,12 +86,12 @@ async def get_events_from_wikidata(city_id: str, era: str, exclude_events: Set[s
                 ORDER BY ?date
                 LIMIT 50
                 """
-        
+
         headers = {'Accept': 'application/sparql-results+json'}
         response = requests.get(WIKIDATA_SPARQL_URL, params={'query': query}, headers=headers)
         response.raise_for_status()
         data = response.json()
-        
+
         events = []
         for result in data.get('results', {}).get('bindings', []):
             event = {
@@ -102,7 +102,7 @@ async def get_events_from_wikidata(city_id: str, era: str, exclude_events: Set[s
             # Проверяем, не было ли это событие уже показано
             if exclude_events is None or event['label'] not in exclude_events:
                 events.append(event)
-        
+
         return events
     except Exception as e:
         logger.error(f"Error getting events from Wikidata: {e}")
@@ -120,58 +120,69 @@ def eras_keyboard():
     ])
 
 
+def time_keyboard():
+    """Создает клавиатуру для выбора времени."""
+    keyboard = []
+    # Создаем кнопки для каждого часа
+    for hour in range(0, 24):
+        time_str = f"{hour:02d}:00"
+        keyboard.append([InlineKeyboardButton(time_str, callback_data=f'time_{hour}')])
+    keyboard.append([InlineKeyboardButton("↩️ Назад", callback_data='back')])
+    return InlineKeyboardMarkup(keyboard)
+
+
 async def get_historical_event(user_id: int) -> str:
     """Получает историческое событие из Wikidata."""
     try:
         city = user_data[user_id]['city']
         era = user_data[user_id]['era']
         city_id = user_data[user_id].get('city_id')
-        
+
         if not city_id:
             city_id = await get_city_wikidata_id(city)
             if city_id:
                 user_data[user_id]['city_id'] = city_id
-        
+
         if not city_id:
             return f"К сожалению, не удалось найти информацию о городе {city} в базе данных."
-        
+
         # Получаем уже показанные события
         shown_events = user_data[user_id].get('shown_events', set())
-        
+
         # Получаем новые события, исключая уже показанные
         events = await get_events_from_wikidata(city_id, era, shown_events)
-        
+
         if not events:
             if shown_events:
                 return f"К сожалению, все исторические события для {city} в выбранный период уже были показаны."
             return f"К сожалению, не удалось найти исторические события для {city} в выбранный период."
-        
+
         # Выбираем случайное событие
         event = random.choice(events)
-        
+
         # Добавляем событие в список показанных
         if 'shown_events' not in user_data[user_id]:
             user_data[user_id]['shown_events'] = set()
         user_data[user_id]['shown_events'].add(event['label'])
-        
+
         # Форматируем дату
         try:
             date = datetime.fromisoformat(event['date'].replace('Z', '+00:00'))
             formatted_date = date.strftime('%d.%m.%Y')
         except:
             formatted_date = event['date']
-        
+
         # Формируем сообщение
         message = f"📅 {formatted_date}\n\n"
         message += f"📜 {event['label']}\n"
-        
+
         if event.get('description'):
             message += f"\n📝 {event['description']}\n"
-        
+
         message += f"\n🏙 {city}"
-        
+
         return message
-        
+
     except Exception as e:
         logger.error(f"Error in get_historical_event: {e}")
         return "Произошла ошибка при получении исторического события. Пожалуйста, попробуйте позже."
@@ -316,20 +327,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return MAIN_MENU
 
     elif query.data == 'subscribe':
-        user = query.from_user
-        if user.id not in subscribers:
-            subscribers[user.id] = user_data[user.id]
-            await query.edit_message_text(
-                "✅ Вы подписались на ежедневные исторические события!\n"
-                "Каждый день в 10:00 вы будете получать новое событие.",
-                reply_markup=main_menu_keyboard()
-            )
-        else:
-            await query.edit_message_text(
-                "Вы уже подписаны на ежедневные события!",
-                reply_markup=main_menu_keyboard()
-            )
-        return MAIN_MENU
+        return await subscribe(update, context)
 
     elif query.data == 'help':
         return await help_command(update, context)
@@ -358,44 +356,99 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return MAIN_MENU
 
 
-async def send_daily_event(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отправляет ежедневное событие всем подписчикам."""
-    for user_id, user_info in subscribers.items():
-        try:
-            event = await get_historical_event(user_id)
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=f"📜 Ежедневное историческое событие:\n\n{event}\n\n",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔁 Еще событие", callback_data='get_event')],
-                    [InlineKeyboardButton("↩️ В главное меню", callback_data='back')]
-                ])
-            )
-        except Exception as e:
-            logger.error(f"Error sending daily event to user {user_id}: {e}")
-
-
-async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Подписывает пользователя на ежедневные события."""
+async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Начинает процесс подписки на ежедневные события."""
     user = update.effective_user
-    if user.id not in subscribers:
-        subscribers[user.id] = user_data[user.id]
+    if user.id in subscribers:
         await update.message.reply_text(
-            "✅ Вы подписались на ежедневные исторические события!\n"
-            "Каждый день в 10:00 вы будете получать новое событие.",
+            "Вы уже подписаны на ежедневные события!\n"
+            f"Время получения: {subscribers[user.id].get('time', '10:00')}\n"
+            "Используйте /unsubscribe для отмены подписки.",
             reply_markup=main_menu_keyboard()
         )
-    else:
-        await update.message.reply_text(
-            "Вы уже подписаны на ежедневные события!",
+        return MAIN_MENU
+
+    await update.message.reply_text(
+        "Выберите время, в которое хотите получать ежедневные события:",
+        reply_markup=time_keyboard()
+    )
+    return SELECT_TIME
+
+
+async def select_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обрабатывает выбор времени для ежедневной рассылки."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == 'back':
+        await query.edit_message_text(
+            "Главное меню:",
             reply_markup=main_menu_keyboard()
         )
+        return MAIN_MENU
+
+    hour = int(query.data.split('_')[1])
+    user = query.from_user
+
+    # Сохраняем настройки подписки
+    subscribers[user.id] = {
+        'city': user_data[user.id]['city'],
+        'city_id': user_data[user.id].get('city_id'),
+        'era': user_data[user.id]['era'],
+        'time': time(hour=hour, minute=0)
+    }
+
+    # Обновляем задачу в планировщике
+    job_name = f'daily_event_{user.id}'
+    # Удаляем старую задачу, если она существует
+    if job_name in context.job_queue.jobs():
+        context.job_queue.jobs()[job_name].schedule_removal()
+
+    # Создаем новую задачу
+    context.job_queue.run_daily(
+        send_daily_event,
+        time=time(hour=hour, minute=0),
+        name=job_name,
+        data={'user_id': user.id}
+    )
+
+    await query.edit_message_text(
+        f"✅ Вы подписались на ежедневные исторические события!\n"
+        f"Время получения: {hour:02d}:00",
+        reply_markup=main_menu_keyboard()
+    )
+    return MAIN_MENU
+
+
+async def send_daily_event(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отправляет ежедневное событие подписчику."""
+    user_id = context.job.data['user_id']
+    if user_id not in subscribers:
+        return
+
+    try:
+        event = await get_historical_event(user_id)
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"📜 Ежедневное историческое событие:\n\n{event}\n\n",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔁 Еще событие", callback_data='get_event')],
+                [InlineKeyboardButton("↩️ В главное меню", callback_data='back')]
+            ])
+        )
+    except Exception as e:
+        logger.error(f"Error sending daily event to user {user_id}: {e}")
 
 
 async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отписывает пользователя от ежедневных событий."""
     user = update.effective_user
     if user.id in subscribers:
+        # Удаляем задачу из планировщика
+        job_name = f'daily_event_{user.id}'
+        if job_name in context.job_queue.jobs():
+            context.job_queue.jobs()[job_name].schedule_removal()
+
         del subscribers[user.id]
         await update.message.reply_text(
             "❌ Вы отписались от ежедневных исторических событий.",
@@ -416,19 +469,12 @@ def main() -> None:
     application.add_handler(CommandHandler('subscribe', subscribe))
     application.add_handler(CommandHandler('unsubscribe', unsubscribe))
 
-    # Настраиваем ежедневную отправку событий в 10:00
-    job_queue = application.job_queue
-    job_queue.run_daily(
-        send_daily_event,
-        time=time(hour=10, minute=0),
-        name='daily_event'
-    )
-
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
             MAIN_MENU: [
-                CallbackQueryHandler(main_menu, pattern='^(change_city|choose_era|get_event|subscribe|help|cancel|back)$')
+                CallbackQueryHandler(main_menu,
+                                     pattern='^(change_city|choose_era|get_event|subscribe|help|cancel|back)$')
             ],
             SELECT_CITY: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, select_city),
@@ -438,6 +484,10 @@ def main() -> None:
                 CallbackQueryHandler(select_era, pattern='^era_'),
                 CallbackQueryHandler(main_menu, pattern='^back$'),
                 CallbackQueryHandler(cancel, pattern='^cancel$')
+            ],
+            SELECT_TIME: [
+                CallbackQueryHandler(select_time, pattern='^time_'),
+                CallbackQueryHandler(main_menu, pattern='^back$')
             ]
         },
         fallbacks=[
