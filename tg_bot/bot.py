@@ -182,7 +182,13 @@ async def get_historical_event(user_id: int) -> str:
             message += f"\n📝 {event['description']}\n"
 
         message += f"\n🏙 {city}\n"
-        message += f"\n🗺 <a href='https://mnstupichev.github.io/History-project/?event={event['label']}&date={formatted_date}&city={city}'>Событие на карте</a>"
+
+        # Кодируем параметры URL
+        event_label = requests.utils.quote(event['label'])
+        formatted_date = requests.utils.quote(formatted_date)
+        city = requests.utils.quote(city)
+
+        message += f"\n🗺 <a href='https://mnstupichev.github.io/History-project/?event={event_label}&date={formatted_date}&city={city}'>Событие на карте</a>"
 
         return message
 

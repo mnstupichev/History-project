@@ -14,26 +14,37 @@ document.addEventListener('DOMContentLoaded', function() {
             description: "27 мая 1703 года был основан город Санкт-Петербург. В этот день на Заячьем острове была заложена Петропавловская крепость, что считается официальной датой основания города.",
             date: "27.05.1703",
             coordinates: [59.9343, 30.3351],
-            wikidataUrl: "https://mnstupichev.github.io/History-project/"
+            link: "https://mnstupichev.github.io/History-project/"
         }
     };
 
     // Инициализация приложения
     async function init() {
+        if (APP.isInitialized) return;
+
         try {
             showLoading(true);
+            createBaseStructure();
+            setupEventHandlers();
+            initTimeline();
 
             // Проверяем, есть ли событие в URL
-            if (displayEventFromUrl()) {
-                return;
+            const params = getUrlParams();
+            if (params.event && params.date && params.city) {
+                // Проверяем авторизацию
+                const savedUser = localStorage.getItem('currentUser');
+                if (savedUser) {
+                    APP.currentUser = JSON.parse(savedUser);
+                    displayEventFromUrl();
+                } else {
+                    showAuthModal();
+                }
+            } else {
+                // Если нет события в URL, проверяем авторизацию
+                checkAuth();
             }
 
-            // Если нет события в URL, показываем событие по умолчанию
-            if (APP.currentUser) {
-                displayDefaultEvent();
-            } else {
-                showAuthModal();
-            }
+            APP.isInitialized = true;
         } catch (error) {
             console.error('Initialization error:', error);
             alert('Ошибка инициализации: ' + error.message);
@@ -711,23 +722,20 @@ document.addEventListener('DOMContentLoaded', function() {
             return false;
         }
 
-        // Проверяем, зарегистрирован ли пользователь
-        if (!APP.currentUser) {
-            showAuthModal();
-            return true;
-        }
-
         // Создаем событие из параметров URL
         const event = {
-            title: params.event,
-            description: `Историческое событие в городе ${params.city}`,
-            date: params.date,
+            title: decodeURIComponent(params.event),
+            description: `Историческое событие в городе ${decodeURIComponent(params.city)}`,
+            date: decodeURIComponent(params.date),
             coordinates: [59.9343, 30.3351], // Координаты Санкт-Петербурга по умолчанию
             link: window.location.href
         };
 
-        // Отображаем событие на карте
-        displayEvent(event);
+        // Отображаем событие
+        APP.currentEvents = [event];
+        APP.currentEventIndex = 0;
+        displayEvents();
+        updateEventsList();
         return true;
     }
 
