@@ -367,3 +367,42 @@ button:disabled {
 .profile-form button:hover {
     background-color: #2980b9;
 }
+
+/* Responsive styles */
+@media screen and (max-width: 768px) {
+    .map-container {
+        flex-direction: column;
+    }
+
+    #map {
+        height: 400px;
+        margin-bottom: 20px;
+    }
+
+    .controls {
+        flex-direction: column-reverse;
+    }
+
+    .events-list {
+        margin-bottom: 20px;
+    }
+
+    .container {
+        padding: 10px;
+    }
+
+    header {
+        flex-direction: column;
+        text-align: center;
+        gap: 10px;
+    }
+
+    h1 {
+        font-size: 24px;
+    }
+}
+
+/* Ensure map has a minimum height on all devices */
+#map {
+    min-height: 400px;
+}
