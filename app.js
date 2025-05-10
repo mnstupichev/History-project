@@ -7,19 +7,39 @@ document.addEventListener('DOMContentLoaded', function() {
         isInitialized: false,
         cityWikidataId: null,
         markers: [],
-        timelineStartYear: 1700,
-        timelineEndYear: 2000
+        timelineStartYear: 1000,
+        timelineEndYear: 2000,
+        defaultEvent: {
+            title: "Основание Санкт-Петербурга",
+            description: "27 мая 1703 года был основан город Санкт-Петербург. В этот день на Заячьем острове была заложена Петропавловская крепость, что считается официальной датой основания города.",
+            date: "27.05.1703",
+            coordinates: [59.9343, 30.3351],
+            wikidataUrl: "https://mnstupichev.github.io/History-project/"
+        }
     };
 
     // Инициализация приложения
-    function init() {
-        if (APP.isInitialized) return;
+    async function init() {
+        try {
+            showLoading(true);
 
-        createBaseStructure();
-        setupEventHandlers();
-        initTimeline();
-        checkAuth();
-        APP.isInitialized = true;
+            // Проверяем, есть ли событие в URL
+            if (displayEventFromUrl()) {
+                return;
+            }
+
+            // Если нет события в URL, показываем событие по умолчанию
+            if (APP.currentUser) {
+                displayDefaultEvent();
+            } else {
+                showAuthModal();
+            }
+        } catch (error) {
+            console.error('Initialization error:', error);
+            alert('Ошибка инициализации: ' + error.message);
+        } finally {
+            showLoading(false);
+        }
     }
 
     // Создание базовой структуры страницы
@@ -180,7 +200,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (savedUser) {
                 APP.currentUser = JSON.parse(savedUser);
                 document.getElementById('cityInput').value = APP.currentUser.city || 'Санкт-Петербург';
-                loadUserEvents();
+                displayDefaultEvent();
             } else {
                 showAuthModal();
             }
@@ -189,6 +209,32 @@ document.addEventListener('DOMContentLoaded', function() {
             localStorage.removeItem('currentUser');
             showAuthModal();
         }
+    }
+
+    // Отображение события по умолчанию
+    function displayDefaultEvent() {
+        if (!APP.map) return;
+
+        APP.currentEvents = [APP.defaultEvent];
+        APP.currentEventIndex = 0;
+
+        // Очистка предыдущих маркеров
+        APP.markers.forEach(marker => marker.remove());
+        APP.markers = [];
+
+        // Добавление маркера
+        const marker = L.marker(APP.defaultEvent.coordinates).addTo(APP.map)
+            .bindPopup(`<b>${APP.defaultEvent.title}</b><br>${APP.defaultEvent.date}`);
+
+        APP.markers.push(marker);
+        marker.openPopup();
+
+        // Установка вида карты
+        APP.map.setView(APP.defaultEvent.coordinates, 12);
+
+        // Обновление информации о событии
+        displayEventInfo(APP.defaultEvent);
+        updateEventsList();
     }
 
     // Поиск Wikidata ID для города
@@ -200,25 +246,25 @@ document.addEventListener('DOMContentLoaded', function() {
                     rdfs:label "${cityName}"@ru.
                     SERVICE wikibase:label { bd:serviceParam wikibase:language "ru". }
                 } LIMIT 1`;
-            
+
             const url = `https://query.wikidata.org/sparql?query=${encodeURIComponent(query)}&format=json`;
-            
+
             const response = await fetch(url, {
                 headers: { 'Accept': 'application/json' }
             });
-            
+
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
-            
+
             const data = await response.json();
-            
+
             if (data.results.bindings.length > 0) {
                 const cityUri = data.results.bindings[0].city.value;
                 APP.cityWikidataId = cityUri.split('/').pop();
                 return true;
             }
-            
+
             return false;
         } catch (error) {
             console.error('Error finding city:', error);
@@ -229,12 +275,12 @@ document.addEventListener('DOMContentLoaded', function() {
     // Загрузка событий для пользователя
     async function loadUserEvents() {
         if (!APP.cityWikidataId) return;
-        
+
         try {
             showLoading(true);
-            
+
             const events = await fetchHistoricalEvents(APP.timelineStartYear, APP.timelineEndYear);
-            
+
             if (events.length > 0) {
                 APP.currentEvents = events;
                 APP.currentEventIndex = 0;
@@ -262,7 +308,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Получение исторических событий с Wikidata
     async function fetchHistoricalEvents(startYear, endYear) {
         if (!APP.cityWikidataId) return [];
-        
+
         try {
             const query = `
                 SELECT DISTINCT ?event ?eventLabel ?date ?coord ?description WHERE {
@@ -279,23 +325,23 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 ORDER BY ?date
                 LIMIT 100`;
-            
+
             const url = `https://query.wikidata.org/sparql?query=${encodeURIComponent(query)}&format=json`;
-            
+
             const response = await fetch(url, {
                 headers: { 'Accept': 'application/json' }
             });
-            
+
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
-            
+
             const data = await response.json();
-            
+
             return data.results.bindings.map(item => {
                 const date = new Date(item.date.value);
                 const coord = item.coord?.value;
-                
+
                 return {
                     title: item.eventLabel.value,
                     description: item.description?.value || 'Описание отсутствует',
@@ -313,7 +359,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Парсинг координат
     function parseCoordinates(coordString) {
         if (!coordString) return null;
-        
+
         try {
             const matches = coordString.match(/Point\(([-\d.]+) ([-\d.]+)\)/);
             if (matches && matches.length === 3) {
@@ -330,23 +376,23 @@ document.addEventListener('DOMContentLoaded', function() {
     // Отображение событий на карте
     function displayEvents() {
         if (!APP.map || APP.currentEvents.length === 0) return;
-        
+
         APP.markers.forEach(marker => marker.remove());
         APP.markers = [];
-        
+
         const eventsWithCoords = APP.currentEvents.filter(event => event.coordinates !== null);
-        
+
         eventsWithCoords.forEach((event, index) => {
             const marker = L.marker(event.coordinates).addTo(APP.map)
                 .bindPopup(`<b>${event.title}</b><br>${event.date}`);
-            
+
             APP.markers.push(marker);
-            
+
             if (index === APP.currentEventIndex) {
                 marker.openPopup();
             }
         });
-        
+
         if (eventsWithCoords.length > 0) {
             const currentEvent = eventsWithCoords[APP.currentEventIndex % eventsWithCoords.length];
             APP.map.setView(currentEvent.coordinates, 12);
@@ -360,34 +406,28 @@ document.addEventListener('DOMContentLoaded', function() {
     function updateEventsList() {
         const container = document.getElementById('eventsListContainer');
         const countElement = document.getElementById('eventsCount');
-        
+
         if (!container || !countElement) return;
-        
+
         container.innerHTML = '';
         countElement.textContent = APP.currentEvents.length;
-        
+
         APP.currentEvents.forEach((event, index) => {
             const eventElement = document.createElement('div');
             eventElement.className = 'event-item';
             eventElement.innerHTML = `
                 <h4>${event.title}</h4>
                 <p>${event.date}</p>
-                ${event.coordinates ? '' : '<p class="no-coords">(нет координат)</p>'}
             `;
-            
+
             eventElement.addEventListener('click', () => {
                 APP.currentEventIndex = index;
-                if (event.coordinates) {
-                    APP.map.setView(event.coordinates, 12);
-                    const marker = APP.markers.find(m => 
-                        m.getLatLng().lat === event.coordinates[0] && 
-                        m.getLatLng().lng === event.coordinates[1]
-                    );
-                    if (marker) marker.openPopup();
-                }
+                APP.map.setView(event.coordinates, 12);
+                const marker = APP.markers[0];
+                if (marker) marker.openPopup();
                 displayEventInfo(event);
             });
-            
+
             container.appendChild(eventElement);
         });
     }
@@ -398,9 +438,8 @@ document.addEventListener('DOMContentLoaded', function() {
         eventInfoElement.innerHTML = `
             <h2>${event.title}</h2>
             <p><strong>Дата:</strong> ${event.date}</p>
-            ${event.coordinates ? '' : '<p class="no-coords-info">⚠️ Это событие произошло в указанном городе, но точные координаты неизвестны</p>'}
             <p>${event.description}</p>
-            <a href="${event.wikidataUrl}" target="_blank" rel="noopener noreferrer">Подробнее на Wikidata</a>
+            <a href="${event.wikidataUrl}" target="_blank" rel="noopener noreferrer">Событие на карте</a>
         `;
     }
 
@@ -409,50 +448,50 @@ document.addEventListener('DOMContentLoaded', function() {
         const authContainer = document.createElement('div');
         authContainer.className = 'auth-container';
         authContainer.id = 'authContainer';
-        
+
         const authForm = document.createElement('div');
         authForm.className = 'auth-form';
-        
+
         const authTitle = document.createElement('h2');
         authTitle.textContent = 'Регистрация';
-        
+
         const form = document.createElement('form');
         form.id = 'registrationForm';
-        
+
         const fields = [
             { id: 'firstName', label: 'Имя:', type: 'text' },
             { id: 'lastName', label: 'Фамилия:', type: 'text' },
             { id: 'email', label: 'Email:', type: 'email' },
             { id: 'password', label: 'Пароль:', type: 'password' }
         ];
-        
+
         fields.forEach(field => {
             const formGroup = document.createElement('div');
             formGroup.className = 'form-group';
-            
+
             const label = document.createElement('label');
             label.setAttribute('for', field.id);
             label.textContent = field.label;
-            
+
             const input = document.createElement('input');
             input.type = field.type;
             input.id = field.id;
             input.required = true;
-            
+
             formGroup.appendChild(label);
             formGroup.appendChild(input);
             form.appendChild(formGroup);
         });
-        
+
         const submitBtn = document.createElement('button');
         submitBtn.type = 'submit';
         submitBtn.textContent = 'Зарегистрироваться';
         form.appendChild(submitBtn);
-        
+
         authForm.appendChild(authTitle);
         authForm.appendChild(form);
         authContainer.appendChild(authForm);
-        
+
         document.body.appendChild(authContainer);
     }
 
@@ -461,59 +500,59 @@ document.addEventListener('DOMContentLoaded', function() {
         const profileContainer = document.createElement('div');
         profileContainer.className = 'profile-container';
         profileContainer.id = 'profileContainer';
-        
+
         const profileForm = document.createElement('div');
         profileForm.className = 'profile-form';
-        
+
         const profileTitle = document.createElement('h2');
         profileTitle.textContent = 'Профиль';
-        
+
         const form = document.createElement('form');
         form.id = 'profileForm';
-        
+
         const fields = [
             { id: 'profileFirstName', label: 'Имя:', type: 'text' },
             { id: 'profileLastName', label: 'Фамилия:', type: 'text' },
             { id: 'profileEmail', label: 'Email:', type: 'email' }
         ];
-        
+
         fields.forEach(field => {
             const formGroup = document.createElement('div');
             formGroup.className = 'form-group';
-            
+
             const label = document.createElement('label');
             label.setAttribute('for', field.id);
             label.textContent = field.label;
-            
+
             const input = document.createElement('input');
             input.type = field.type;
             input.id = field.id;
             input.required = true;
-            
+
             formGroup.appendChild(label);
             formGroup.appendChild(input);
             form.appendChild(formGroup);
         });
-        
+
         const submitBtn = document.createElement('button');
         submitBtn.type = 'submit';
         submitBtn.textContent = 'Сохранить изменения';
         form.appendChild(submitBtn);
-        
+
         const logoutBtn = document.createElement('button');
         logoutBtn.id = 'logoutBtn';
         logoutBtn.textContent = 'Выйти';
-        
+
         const closeBtn = document.createElement('button');
         closeBtn.id = 'closeProfileBtn';
         closeBtn.textContent = 'Закрыть';
-        
+
         profileForm.appendChild(profileTitle);
         profileForm.appendChild(form);
         profileForm.appendChild(logoutBtn);
         profileForm.appendChild(closeBtn);
         profileContainer.appendChild(profileForm);
-        
+
         document.body.appendChild(profileContainer);
     }
 
@@ -530,11 +569,11 @@ document.addEventListener('DOMContentLoaded', function() {
     // Показать профиль
     function showProfile() {
         if (!APP.currentUser) return;
-        
+
         document.getElementById('profileFirstName').value = APP.currentUser.firstName || '';
         document.getElementById('profileLastName').value = APP.currentUser.lastName || '';
         document.getElementById('profileEmail').value = APP.currentUser.email || '';
-        
+
         document.getElementById('profileContainer').style.display = 'flex';
     }
 
@@ -544,13 +583,13 @@ document.addEventListener('DOMContentLoaded', function() {
         APP.currentEvents = [];
         APP.cityWikidataId = null;
         localStorage.removeItem('currentUser');
-        
+
         APP.markers.forEach(marker => marker.remove());
         APP.markers = [];
-        
+
         document.getElementById('profileContainer').style.display = 'none';
         document.getElementById('authContainer').style.display = 'flex';
-        
+
         document.getElementById('eventInfo').innerHTML = `
             <h2>Выберите местоположение и временной период</h2>
             <p>После регистрации и выбора параметров здесь будет отображаться информация о исторических событиях.</p>
@@ -562,7 +601,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Обработчик регистрации
         document.getElementById('registrationForm')?.addEventListener('submit', async function(e) {
             e.preventDefault();
-            
+
             APP.currentUser = {
                 firstName: document.getElementById('firstName').value,
                 lastName: document.getElementById('lastName').value,
@@ -570,17 +609,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 password: document.getElementById('password').value,
                 city: document.getElementById('cityInput').value || 'Санкт-Петербург'
             };
-            
+
             try {
                 showLoading(true);
-                const cityFound = await findCityWikidataId(APP.currentUser.city);
-                
-                if (cityFound) {
-                    localStorage.setItem('currentUser', JSON.stringify(APP.currentUser));
-                    hideAuthModal();
-                    loadUserEvents();
-                } else {
-                    alert('Не удалось найти указанный город в Wikidata. Попробуйте другое название.');
+                localStorage.setItem('currentUser', JSON.stringify(APP.currentUser));
+                hideAuthModal();
+
+                // После регистрации проверяем, есть ли событие в URL
+                if (!displayEventFromUrl()) {
+                    displayDefaultEvent();
                 }
             } catch (error) {
                 console.error('Registration error:', error);
@@ -589,34 +626,28 @@ document.addEventListener('DOMContentLoaded', function() {
                 showLoading(false);
             }
         });
-        
+
         // Обработчик кнопки применения настроек
         document.getElementById('applySettingsBtn').addEventListener('click', async function() {
             const city = document.getElementById('cityInput').value;
-            
+
             if (!city) {
                 alert('Пожалуйста, введите город');
                 return;
             }
-            
+
             try {
                 showLoading(true);
-                const cityFound = await findCityWikidataId(city);
-                
-                if (cityFound) {
-                    if (!APP.currentUser) {
-                        APP.currentUser = {
-                            city: city
-                        };
-                    } else {
-                        APP.currentUser.city = city;
-                    }
-                    
-                    localStorage.setItem('currentUser', JSON.stringify(APP.currentUser));
-                    await loadUserEvents();
+                if (!APP.currentUser) {
+                    APP.currentUser = {
+                        city: city
+                    };
                 } else {
-                    alert('Не удалось найти указанный город в Wikidata. Попробуйте другое название.');
+                    APP.currentUser.city = city;
                 }
+
+                localStorage.setItem('currentUser', JSON.stringify(APP.currentUser));
+                displayDefaultEvent();
             } catch (error) {
                 console.error('Error applying settings:', error);
                 alert('Ошибка: ' + error.message);
@@ -624,25 +655,25 @@ document.addEventListener('DOMContentLoaded', function() {
                 showLoading(false);
             }
         });
-        
+
         // Обработчик профиля
         document.getElementById('profileLink')?.addEventListener('click', function(e) {
             e.preventDefault();
             showProfile();
         });
-        
+
         // Обработчик обновления профиля
         document.getElementById('profileForm')?.addEventListener('submit', function(e) {
             e.preventDefault();
-            
+
             APP.currentUser.firstName = document.getElementById('profileFirstName').value;
             APP.currentUser.lastName = document.getElementById('profileLastName').value;
             APP.currentUser.email = document.getElementById('profileEmail').value;
-            
+
             localStorage.setItem('currentUser', JSON.stringify(APP.currentUser));
             document.getElementById('profileContainer').style.display = 'none';
         });
-        
+
         // Обработчики кнопок
         document.getElementById('logoutBtn')?.addEventListener('click', logout);
         document.getElementById('closeProfileBtn')?.addEventListener('click', function() {
@@ -661,6 +692,43 @@ document.addEventListener('DOMContentLoaded', function() {
                 btn.textContent = 'Применить';
             }
         });
+    }
+
+    // Функция для получения параметров из URL
+    function getUrlParams() {
+        const params = new URLSearchParams(window.location.search);
+        return {
+            event: params.get('event'),
+            date: params.get('date'),
+            city: params.get('city')
+        };
+    }
+
+    // Функция для отображения события из URL
+    function displayEventFromUrl() {
+        const params = getUrlParams();
+        if (!params.event || !params.date || !params.city) {
+            return false;
+        }
+
+        // Проверяем, зарегистрирован ли пользователь
+        if (!APP.currentUser) {
+            showAuthModal();
+            return true;
+        }
+
+        // Создаем событие из параметров URL
+        const event = {
+            title: params.event,
+            description: `Историческое событие в городе ${params.city}`,
+            date: params.date,
+            coordinates: [59.9343, 30.3351], // Координаты Санкт-Петербурга по умолчанию
+            link: window.location.href
+        };
+
+        // Отображаем событие на карте
+        displayEvent(event);
+        return true;
     }
 
     // Инициализация приложения

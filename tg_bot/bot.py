@@ -181,7 +181,8 @@ async def get_historical_event(user_id: int) -> str:
         if event.get('description'):
             message += f"\n📝 {event['description']}\n"
 
-        message += f"\n🏙 {city}"
+        message += f"\n🏙 {city}\n"
+        message += f"\n🗺 <a href='https://mnstupichev.github.io/History-project/?event={event['label']}&date={formatted_date}&city={city}'>Событие на карте</a>"
 
         return message
 
