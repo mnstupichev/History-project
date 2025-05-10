@@ -17,42 +17,41 @@
         </header>
         
         <main>
-            <div class="map-container">
-                <div id="map"></div>
-                <div class="controls">
-                    <div class="location-control">
-                        <h3>Настройки поиска</h3>
-                        <div class="form-group">
-                            <label for="cityInput">Город:</label>
-                            <input type="text" id="cityInput" placeholder="Введите город" value="Санкт-Петербург">
-                        </div>
-                        <div class="form-group">
-                            <label>Временной период:</label>
-                            <div class="timeline-container">
-                                <div class="timeline">
-                                    <div class="timeline-track"></div>
-                                    <div class="timeline-handle start-handle"></div>
-                                    <div class="timeline-handle end-handle"></div>
-                                </div>
-                                <div class="timeline-years">
-                                    <span id="startYear">1500</span>
-                                    <span id="endYear">2000</span>
-                                </div>
-                            </div>
-                        </div>
-                        <button id="applySettingsBtn">Применить</button>
-                    </div>
-                    <div class="events-list">
-                        <h3>Список событий (<span id="eventsCount">0</span>)</h3>
-                        <div id="eventsListContainer"></div>
-                    </div>
-                </div>
-            </div>
-            
+            <div id="map"></div>
+
             <div id="eventInfo">
                 <h2>Выберите местоположение и временной период</h2>
                 <p>После выбора параметров здесь будет отображаться информация о исторических событиях.</p>
             </div>
+
+            <div class="events-list">
+                <h3>Список событий (<span id="eventsCount">0</span>)</h3>
+                <div id="eventsListContainer"></div>
+            </div>
+
+            <div class="location-control">
+                <h3>Настройки поиска</h3>
+                <div class="form-group">
+                    <label for="cityInput">Город:</label>
+                    <input type="text" id="cityInput" placeholder="Введите город" value="Санкт-Петербург">
+                </div>
+                <div class="form-group">
+                    <label>Временной период:</label>
+                    <div class="timeline-container">
+                        <div class="timeline">
+                            <div class="timeline-track"></div>
+                            <div class="timeline-handle start-handle"></div>
+                            <div class="timeline-handle end-handle"></div>
+                        </div>
+                        <div class="timeline-years">
+                            <span id="startYear">1000</span>
+                            <span id="endYear">2000</span>
+                        </div>
+                    </div>
+                </div>
+                <button id="applySettingsBtn">Применить</button>
+            </div>
+
             <footer>
                 <div class="telegram-bot-link">
                     <a href="https://t.me/your_bot_name" target="_blank">

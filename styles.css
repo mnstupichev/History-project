@@ -298,23 +298,6 @@ button:disabled {
 
 /* Responsive styles */
 @media screen and (max-width: 768px) {
-    .map-container {
-        flex-direction: column;
-    }
-
-    #map {
-        height: 400px;
-        margin-bottom: 20px;
-    }
-
-    .controls {
-        flex-direction: column;
-    }
-
-    .events-list {
-        margin: 20px 0;
-    }
-
     .container {
         padding: 10px;
     }
@@ -325,6 +308,7 @@ button:disabled {
         align-items: center;
         text-align: left;
         gap: 10px;
+        margin-bottom: 20px;
     }
 
     h1 {
@@ -332,31 +316,46 @@ button:disabled {
         margin: 0;
     }
 
-    /* Reorder elements in mobile view */
+    .map-container {
+        display: flex;
+        flex-direction: column;
+    }
+
+    #map {
+        height: 400px;
+        width: 100%;
+        margin-bottom: 20px;
+    }
+
+    .controls {
+        display: none;
+    }
+
+    /* Mobile layout */
     main {
         display: flex;
         flex-direction: column;
     }
 
-    .map-container {
-        order: 3;
-    }
-
     #map {
-        order: 3;
+        order: 1;
     }
 
     #eventInfo {
-        order: 4;
+        order: 2;
         margin: 20px 0;
     }
 
     .events-list {
-        order: 1;
+        order: 3;
+        margin: 20px 0;
+        display: block !important;
     }
 
     .location-control {
-        order: 2;
+        order: 4;
+        margin: 20px 0;
+        display: block !important;
     }
 
     footer {
@@ -377,11 +376,5 @@ button:disabled {
         -webkit-touch-callout: none;
         -webkit-user-select: none;
         user-select: none;
-    }
-
-    .auth-form,
-    .profile-form {
-        margin: 10px;
-        padding: 20px;
     }
 }
