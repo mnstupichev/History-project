@@ -367,6 +367,10 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             showLoading(true);
 
+            // Очищаем предыдущие маркеры
+            APP.markers.forEach(marker => marker.remove());
+            APP.markers = [];
+
             // Получаем Wikidata ID для города
             if (!APP.cityWikidataId) {
                 const cityId = await findCityWikidataId(APP.currentUser.city);
@@ -385,19 +389,43 @@ document.addEventListener('DOMContentLoaded', function() {
                 displayEvents();
                 updateEventsList();
             } else {
+                // Очищаем данные о событиях
+                APP.currentEvents = [];
+                APP.currentEventIndex = 0;
+
+                // Очищаем информацию о событии
                 document.getElementById('eventInfo').innerHTML = `
                     <h2>События не найдены</h2>
                     <p>Попробуйте изменить временной период или город.</p>
                 `;
                 document.getElementById('eventsListContainer').innerHTML = '';
                 document.getElementById('eventsCount').textContent = '0';
+
+                // Устанавливаем вид карты по умолчанию
+                if (APP.map) {
+                    APP.map.setView([59.9343, 30.3351], 12); // Центр на Санкт-Петербурге
+                }
             }
         } catch (error) {
             console.error('Error loading events:', error);
+
+            // Очищаем данные о событиях и маркеры
+            APP.currentEvents = [];
+            APP.currentEventIndex = 0;
+            APP.markers.forEach(marker => marker.remove());
+            APP.markers = [];
+
             document.getElementById('eventInfo').innerHTML = `
                 <h2>Ошибка загрузки</h2>
                 <p>${error.message}</p>
             `;
+            document.getElementById('eventsListContainer').innerHTML = '';
+            document.getElementById('eventsCount').textContent = '0';
+
+            // Устанавливаем вид карты по умолчанию
+            if (APP.map) {
+                APP.map.setView([59.9343, 30.3351], 12); // Центр на Санкт-Петербурге
+            }
         } finally {
             showLoading(false);
         }
