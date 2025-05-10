@@ -35,10 +35,21 @@ document.addEventListener('DOMContentLoaded', function() {
             return false;
         }
 
+        const cityFromUrl = decodeURIComponent(params.city);
+
+        // Если город из URL отличается от текущего города пользователя,
+        // обновляем город пользователя
+        if (APP.currentUser && APP.currentUser.city !== cityFromUrl) {
+            APP.currentUser.city = cityFromUrl;
+            document.getElementById('cityInput').value = cityFromUrl;
+            APP.cityWikidataId = null; // Сбрасываем ID города
+            localStorage.setItem('currentUser', JSON.stringify(APP.currentUser));
+        }
+
         // Создаем событие из параметров URL
         const event = {
             title: decodeURIComponent(params.event),
-            description: `Историческое событие в городе ${decodeURIComponent(params.city)}`,
+            description: `Историческое событие в городе ${cityFromUrl}`,
             date: decodeURIComponent(params.date),
             coordinates: [59.9343, 30.3351] // Координаты Санкт-Петербурга по умолчанию
         };
@@ -237,8 +248,18 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             const savedUser = localStorage.getItem('currentUser');
             if (savedUser) {
-                APP.currentUser = JSON.parse(savedUser);
-                document.getElementById('cityInput').value = APP.currentUser.city || 'Санкт-Петербург';
+                const parsedUser = JSON.parse(savedUser);
+                // Проверяем структуру данных пользователя
+                if (!parsedUser || typeof parsedUser !== 'object') {
+                    throw new Error('Invalid user data structure');
+                }
+
+                // Проверяем обязательные поля
+                if (!parsedUser.city) {
+                    parsedUser.city = 'Санкт-Петербург';
+                }
+
+                APP.currentUser = parsedUser;
 
                 // Проверяем, есть ли событие в URL
                 const params = getUrlParams();
@@ -246,7 +267,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     // Если есть параметры из Telegram, показываем событие
                     displayEventFromUrl();
                 } else {
-                    // Иначе загружаем все события
+                    // Иначе устанавливаем город по умолчанию и загружаем события
+                    document.getElementById('cityInput').value = APP.currentUser.city;
+                    APP.cityWikidataId = null; // Сбрасываем ID города
                     loadUserEvents();
                 }
             } else {
@@ -287,19 +310,29 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Поиск Wikidata ID для города
     async function findCityWikidataId(cityName) {
+        if (!cityName || typeof cityName !== 'string' || cityName.trim() === '') {
+            throw new Error('Некорректное название города');
+        }
+
         try {
             const query = `
                 SELECT ?city ?cityLabel WHERE {
                     ?city wdt:P31/wdt:P279* wd:Q515;
-                    rdfs:label "${cityName}"@ru.
+                    rdfs:label "${cityName.trim()}"@ru.
                     SERVICE wikibase:label { bd:serviceParam wikibase:language "ru". }
                 } LIMIT 1`;
 
             const url = `https://query.wikidata.org/sparql?query=${encodeURIComponent(query)}&format=json`;
 
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 секунд таймаут
+
             const response = await fetch(url, {
-                headers: { 'Accept': 'application/json' }
+                headers: { 'Accept': 'application/json' },
+                signal: controller.signal
             });
+
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
@@ -307,14 +340,20 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const data = await response.json();
 
-            if (data.results.bindings.length > 0) {
-                const cityUri = data.results.bindings[0].city.value;
-                APP.cityWikidataId = cityUri.split('/').pop();
-                return true;
+            if (!data || !data.results || !data.results.bindings) {
+                throw new Error('Некорректный формат ответа от Wikidata');
             }
 
-            return false;
+            if (data.results.bindings.length > 0) {
+                const cityUri = data.results.bindings[0].city.value;
+                return cityUri.split('/').pop();
+            }
+
+            return null;
         } catch (error) {
+            if (error.name === 'AbortError') {
+                throw new Error('Превышено время ожидания ответа от Wikidata');
+            }
             console.error('Error finding city:', error);
             throw new Error('Не удалось найти город в Wikidata. Проверьте подключение к интернету и попробуйте снова.');
         }
@@ -322,11 +361,19 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Загрузка событий для пользователя
     async function loadUserEvents() {
-        if (!APP.cityWikidataId) return;
-
         try {
             showLoading(true);
 
+            // Получаем Wikidata ID для города
+            if (!APP.cityWikidataId) {
+                const cityId = await findCityWikidataId(APP.currentUser.city);
+                if (!cityId) {
+                    throw new Error('Не удалось найти город в базе данных');
+                }
+                APP.cityWikidataId = cityId;
+            }
+
+            // Получаем события
             const events = await fetchHistoricalEvents(APP.timelineStartYear, APP.timelineEndYear);
 
             if (events.length > 0) {
@@ -692,28 +739,37 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
 
+            if (!APP.currentUser) {
+                APP.currentUser = {
+                    city: city
+                };
+            }
+
             try {
                 showLoading(true);
 
                 // Обновляем данные пользователя
-                if (!APP.currentUser) {
-                    APP.currentUser = {
-                        city: city
-                    };
-                } else {
-                    APP.currentUser.city = city;
-                }
+                APP.currentUser.city = city;
 
                 // Сохраняем обновленные данные
                 localStorage.setItem('currentUser', JSON.stringify(APP.currentUser));
 
+                // Сбрасываем cityWikidataId, чтобы он был получен заново
+                APP.cityWikidataId = null;
+
                 // Проверяем, есть ли событие в URL
                 const params = getUrlParams();
                 if (params.event && params.date && params.city) {
-                    // Если есть параметры из Telegram, показываем событие
-                    displayEventFromUrl();
+                    const cityFromUrl = decodeURIComponent(params.city);
+                    if (city === cityFromUrl) {
+                        // Если город совпадает с городом из URL, показываем событие
+                        displayEventFromUrl();
+                    } else {
+                        // Если город отличается, загружаем все события для нового города
+                        await loadUserEvents();
+                    }
                 } else {
-                    // Иначе загружаем все события для нового города
+                    // Если нет параметров из URL, загружаем все события
                     await loadUserEvents();
                 }
             } catch (error) {
