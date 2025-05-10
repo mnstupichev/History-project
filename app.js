@@ -694,6 +694,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
             try {
                 showLoading(true);
+
+                // Обновляем данные пользователя
                 if (!APP.currentUser) {
                     APP.currentUser = {
                         city: city
@@ -702,8 +704,18 @@ document.addEventListener('DOMContentLoaded', function() {
                     APP.currentUser.city = city;
                 }
 
+                // Сохраняем обновленные данные
                 localStorage.setItem('currentUser', JSON.stringify(APP.currentUser));
-                loadUserEvents();
+
+                // Проверяем, есть ли событие в URL
+                const params = getUrlParams();
+                if (params.event && params.date && params.city) {
+                    // Если есть параметры из Telegram, показываем событие
+                    displayEventFromUrl();
+                } else {
+                    // Иначе загружаем все события для нового города
+                    await loadUserEvents();
+                }
             } catch (error) {
                 console.error('Error applying settings:', error);
                 alert('Ошибка: ' + error.message);
