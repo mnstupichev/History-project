@@ -120,14 +120,16 @@ def eras_keyboard():
     ])
 
 
-def time_keyboard():
-    """Создает клавиатуру для выбора времени."""
-    keyboard = []
-    # Создаем кнопки для каждого часа
-    for hour in range(0, 24):
-        time_str = f"{hour:02d}:00"
-        keyboard.append([InlineKeyboardButton(time_str, callback_data=f'time_{hour}')])
-    keyboard.append([InlineKeyboardButton("↩️ Назад", callback_data='back')])
+def time_slider_keyboard(current_hour: int = 10) -> InlineKeyboardMarkup:
+    """Создает клавиатуру-слайдер для выбора времени."""
+    keyboard = [
+        [
+            InlineKeyboardButton("◀️", callback_data='time_prev'),
+            InlineKeyboardButton(f"{current_hour:02d}:00", callback_data='time_confirm'),
+            InlineKeyboardButton("▶️", callback_data='time_next')
+        ],
+        [InlineKeyboardButton("↩️ Назад", callback_data='back')]
+    ]
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -360,23 +362,27 @@ async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начинает процесс подписки на ежедневные события."""
     user = update.effective_user
     if user.id in subscribers:
+        current_time = subscribers[user.id].get('time', time(10, 0))
         await update.message.reply_text(
             "Вы уже подписаны на ежедневные события!\n"
-            f"Время получения: {subscribers[user.id].get('time', '10:00')}\n"
+            f"Время получения: {current_time.hour:02d}:00\n"
             "Используйте /unsubscribe для отмены подписки.",
             reply_markup=main_menu_keyboard()
         )
         return MAIN_MENU
 
+    # Сохраняем начальное время в контексте пользователя
+    context.user_data['temp_hour'] = 10
+
     await update.message.reply_text(
         "Выберите время, в которое хотите получать ежедневные события:",
-        reply_markup=time_keyboard()
+        reply_markup=time_slider_keyboard(10)
     )
     return SELECT_TIME
 
 
 async def select_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обрабатывает выбор времени для ежедневной рассылки."""
+    """Обрабатывает выбор времени через слайдер."""
     query = update.callback_query
     await query.answer()
 
@@ -387,37 +393,54 @@ async def select_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         )
         return MAIN_MENU
 
-    hour = int(query.data.split('_')[1])
-    user = query.from_user
+    # Получаем текущий час из контекста пользователя
+    current_hour = context.user_data.get('temp_hour', 10)
 
-    # Сохраняем настройки подписки
-    subscribers[user.id] = {
-        'city': user_data[user.id]['city'],
-        'city_id': user_data[user.id].get('city_id'),
-        'era': user_data[user.id]['era'],
-        'time': time(hour=hour, minute=0)
-    }
+    if query.data == 'time_prev':
+        current_hour = (current_hour - 1) % 24
+    elif query.data == 'time_next':
+        current_hour = (current_hour + 1) % 24
+    elif query.data == 'time_confirm':
+        user = query.from_user
 
-    # Обновляем задачу в планировщике
-    job_name = f'daily_event_{user.id}'
-    # Удаляем старую задачу, если она существует
-    if job_name in context.job_queue.jobs():
-        context.job_queue.jobs()[job_name].schedule_removal()
+        # Сохраняем настройки подписки
+        subscribers[user.id] = {
+            'city': user_data[user.id]['city'],
+            'city_id': user_data[user.id].get('city_id'),
+            'era': user_data[user.id]['era'],
+            'time': time(hour=current_hour, minute=0)
+        }
 
-    # Создаем новую задачу
-    context.job_queue.run_daily(
-        send_daily_event,
-        time=time(hour=hour, minute=0),
-        name=job_name,
-        data={'user_id': user.id}
-    )
+        # Обновляем задачу в планировщике
+        job_name = f'daily_event_{user.id}'
+        # Удаляем старую задачу, если она существует
+        if job_name in context.job_queue.jobs():
+            context.job_queue.jobs()[job_name].schedule_removal()
 
+        # Создаем новую задачу
+        context.job_queue.run_daily(
+            send_daily_event,
+            time=time(hour=current_hour, minute=0),
+            name=job_name,
+            data={'user_id': user.id}
+        )
+
+        await query.edit_message_text(
+            f"✅ Вы подписались на ежедневные исторические события!\n"
+            f"Время получения: {current_hour:02d}:00",
+            reply_markup=main_menu_keyboard()
+        )
+        return MAIN_MENU
+
+    # Сохраняем новый час в контексте пользователя
+    context.user_data['temp_hour'] = current_hour
+
+    # Обновляем клавиатуру с новым временем
     await query.edit_message_text(
-        f"✅ Вы подписались на ежедневные исторические события!\n"
-        f"Время получения: {hour:02d}:00",
-        reply_markup=main_menu_keyboard()
+        "Выберите время, в которое хотите получать ежедневные события:",
+        reply_markup=time_slider_keyboard(current_hour)
     )
-    return MAIN_MENU
+    return SELECT_TIME
 
 
 async def send_daily_event(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -486,8 +509,7 @@ def main() -> None:
                 CallbackQueryHandler(cancel, pattern='^cancel$')
             ],
             SELECT_TIME: [
-                CallbackQueryHandler(select_time, pattern='^time_'),
-                CallbackQueryHandler(main_menu, pattern='^back$')
+                CallbackQueryHandler(select_time, pattern='^(time_prev|time_next|time_confirm|back)$')
             ]
         },
         fallbacks=[
