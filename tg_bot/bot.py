@@ -188,9 +188,9 @@ async def get_historical_event(user_id: int) -> str:
         formatted_date = requests.utils.quote(formatted_date)
         city = requests.utils.quote(city)
 
-        # Формируем ссылку в формате Telegram
+        # Формируем ссылку в HTML формате (будет скрыта в тексте)
         url = f"https://mnstupichev.github.io/History-project/?event={event_label}&date={formatted_date}&city={city}"
-        message += f"\n🗺 [Событие на карте]({url})"
+        message += f"\n🗺 <a href='{url}'>Событие на карте</a>"
 
         return message
 
@@ -483,15 +483,16 @@ async def send_daily_event(context: ContextTypes.DEFAULT_TYPE) -> None:
         event = await get_historical_event(user_id)
         await context.bot.send_message(
             chat_id=user_id,
-            text=f"📜 Ежедневное историческое событие:\n\n{event}\n\n",
+            text=f"📜 Историческое событие:\n\n{event}\n\n",
+            parse_mode='HTML',  # Включаем HTML разметку
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔁 Еще событие", callback_data='get_event')],
                 [InlineKeyboardButton("↩️ В главное меню", callback_data='back')]
-            ])
+            ]),
+            disable_web_page_preview=True
         )
     except Exception as e:
         logger.error(f"Error sending daily event to user {user_id}: {e}")
-
 
 async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отписывает пользователя от ежедневных событий."""
