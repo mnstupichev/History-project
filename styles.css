@@ -339,24 +339,24 @@ button:disabled {
     }
 
     .map-container {
-        order: 1;
+        order: 3;
     }
 
     #map {
-        order: 1;
+        order: 3;
     }
 
     #eventInfo {
-        order: 2;
+        order: 4;
         margin: 20px 0;
     }
 
     .events-list {
-        order: 3;
+        order: 1;
     }
 
     .location-control {
-        order: 4;
+        order: 2;
     }
 
     footer {
