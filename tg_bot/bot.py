@@ -133,6 +133,12 @@ def time_slider_keyboard(current_hour: int = 10) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
+def escape_markdown(text: str) -> str:
+    """Экранирует специальные символы MarkdownV2."""
+    escape_chars = '_*[]()~`>#+-=|{}.!'
+    return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
+
+
 async def get_historical_event(user_id: int) -> str:
     """Получает историческое событие из Wikidata."""
     try:
@@ -174,17 +180,25 @@ async def get_historical_event(user_id: int) -> str:
         except:
             formatted_date = event['date']
 
-        # Формируем сообщение
-        message = f"📅 *{formatted_date}*\n\n"
-        message += f"📜 *{event['label']}*\n"
+        # Кодируем параметры URL
+        event_label = requests.utils.quote(event['label'])
+        formatted_date_url = requests.utils.quote(formatted_date)
+        city_url = requests.utils.quote(city)
+        url = f"https://mnstupichev.github.io/History-project/?event={event_label}&date={formatted_date_url}&city={city_url}"
+
+        # Формируем сообщение в Markdown
+        message = (
+            f"📅 *{escape_markdown(formatted_date)}*\n\n"
+            f"📜 *{escape_markdown(event['label'])}*\n"
+        )
 
         if event.get('description'):
-            message += f"\n📝 {event['description']}\n"
+            message += f"\n📝 {escape_markdown(event['description'])}\n"
 
-        message += f"\n🏙 {city}\n"
-
-        # Формируем Markdown ссылку (текст будет виден, URL - нет)
-        message += f"\n🗺 [Событие на карте]({url})"
+        message += (
+            f"\n🏙 {escape_markdown(city)}\n"
+            f"\n🗺 [Событие на карте]({url})"
+        )
 
         return message
 
@@ -478,7 +492,7 @@ async def send_daily_event(context: ContextTypes.DEFAULT_TYPE) -> None:
         await context.bot.send_message(
             chat_id=user_id,
             text=event,
-            parse_mode='MarkdownV2',  # Используем Markdown для форматирования
+            parse_mode='MarkdownV2',
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔁 Еще событие", callback_data='get_event')],
                 [InlineKeyboardButton("↩️ В главное меню", callback_data='back')]
@@ -487,6 +501,7 @@ async def send_daily_event(context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     except Exception as e:
         logger.error(f"Error sending daily event to user {user_id}: {e}")
+
 
 async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отписывает пользователя от ежедневных событий."""
