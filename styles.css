@@ -262,6 +262,40 @@ button:disabled {
     cursor: not-allowed;
 }
 
+/* Modal windows styles */
+.auth-container,
+.profile-container {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0,0,0,0.5);
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.auth-form,
+.profile-form {
+    background-color: #fff;
+    padding: 30px;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    width: 100%;
+    max-width: 400px;
+    position: relative;
+    margin: 20px;
+}
+
+.auth-form h2,
+.profile-form h2 {
+    color: #2c3e50;
+    margin-bottom: 20px;
+    text-align: center;
+}
+
 /* Responsive styles */
 @media screen and (max-width: 768px) {
     .map-container {
@@ -315,5 +349,11 @@ button:disabled {
 
     .location-control {
         order: 3;
+    }
+
+    .auth-form,
+    .profile-form {
+        margin: 10px;
+        padding: 20px;
     }
 }

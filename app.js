@@ -7,7 +7,7 @@ document.addEventListener('DOMContentLoaded', function() {
         isInitialized: false,
         cityWikidataId: null,
         markers: [],
-        timelineStartYear: 1700,
+        timelineStartYear: 1000,
         timelineEndYear: 2000
     };
 
@@ -66,7 +66,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const startPercent = (parseInt(startHandle.style.left) || 0) / timelineWidth * 100;
             const endPercent = (parseInt(endHandle.style.left) || timelineWidth) / timelineWidth * 100;
             
-            const minYear = 1500;
+            const minYear = 1000;
             const maxYear = new Date().getFullYear();
             
             const startYear = Math.round(minYear + (maxYear - minYear) * (startPercent / 100));
