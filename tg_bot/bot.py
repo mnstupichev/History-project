@@ -175,22 +175,16 @@ async def get_historical_event(user_id: int) -> str:
             formatted_date = event['date']
 
         # Формируем сообщение
-        message = f"📅 {formatted_date}\n\n"
-        message += f"📜 {event['label']}\n"
+        message = f"📅 *{formatted_date}*\n\n"
+        message += f"📜 *{event['label']}*\n"
 
         if event.get('description'):
             message += f"\n📝 {event['description']}\n"
 
         message += f"\n🏙 {city}\n"
 
-        # Кодируем параметры URL
-        event_label = requests.utils.quote(event['label'])
-        formatted_date = requests.utils.quote(formatted_date)
-        city = requests.utils.quote(city)
-
-        # Формируем ссылку в HTML формате (будет скрыта в тексте)
-        url = f"https://mnstupichev.github.io/History-project/?event={event_label}&date={formatted_date}&city={city}"
-        message += f"\n🗺 <a href='{url}'>Событие на карте</a>"
+        # Формируем Markdown ссылку (текст будет виден, URL - нет)
+        message += f"\n🗺 [Событие на карте]({url})"
 
         return message
 
@@ -483,8 +477,8 @@ async def send_daily_event(context: ContextTypes.DEFAULT_TYPE) -> None:
         event = await get_historical_event(user_id)
         await context.bot.send_message(
             chat_id=user_id,
-            text=f"📜 Историческое событие:\n\n{event}\n\n",
-            parse_mode='HTML',  # Включаем HTML разметку
+            text=event,
+            parse_mode='MarkdownV2',  # Используем Markdown для форматирования
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔁 Еще событие", callback_data='get_event')],
                 [InlineKeyboardButton("↩️ В главное меню", callback_data='back')]
