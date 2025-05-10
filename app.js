@@ -433,9 +433,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
             eventElement.addEventListener('click', () => {
                 APP.currentEventIndex = index;
-                APP.map.setView(event.coordinates, 12);
-                const marker = APP.markers[0];
-                if (marker) marker.openPopup();
+                if (event.coordinates) {
+                    APP.map.setView(event.coordinates, 12);
+                    const marker = APP.markers[index];
+                    if (marker) marker.openPopup();
+                }
                 displayEventInfo(event);
             });
 
@@ -446,11 +448,13 @@ document.addEventListener('DOMContentLoaded', function() {
     // Отображение информации о событии
     function displayEventInfo(event) {
         const eventInfoElement = document.getElementById('eventInfo');
+        if (!eventInfoElement) return;
+
         eventInfoElement.innerHTML = `
             <h2>${event.title}</h2>
             <p><strong>Дата:</strong> ${event.date}</p>
             <p>${event.description}</p>
-            <a href="${event.wikidataUrl}" target="_blank" rel="noopener noreferrer">Событие на карте</a>
+            <a href="${event.link}" target="_blank" rel="noopener noreferrer">Событие на карте</a>
         `;
     }
 
@@ -734,7 +738,23 @@ document.addEventListener('DOMContentLoaded', function() {
         // Отображаем событие
         APP.currentEvents = [event];
         APP.currentEventIndex = 0;
-        displayEvents();
+
+        // Очистка предыдущих маркеров
+        APP.markers.forEach(marker => marker.remove());
+        APP.markers = [];
+
+        // Добавление маркера
+        const marker = L.marker(event.coordinates).addTo(APP.map)
+            .bindPopup(`<b>${event.title}</b><br>${event.date}`);
+
+        APP.markers.push(marker);
+        marker.openPopup();
+
+        // Установка вида карты
+        APP.map.setView(event.coordinates, 12);
+
+        // Обновление информации о событии
+        displayEventInfo(event);
         updateEventsList();
         return true;
     }
