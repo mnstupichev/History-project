@@ -18,39 +18,67 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     };
 
+    // Функция для получения параметров из URL
+    function getUrlParams() {
+        const params = new URLSearchParams(window.location.search);
+        return {
+            event: params.get('event'),
+            date: params.get('date'),
+            city: params.get('city')
+        };
+    }
+
+    // Функция для отображения события из URL
+    function displayEventFromUrl() {
+        const params = getUrlParams();
+        if (!params.event || !params.date || !params.city) {
+            return false;
+        }
+
+        // Создаем событие из параметров URL
+        const event = {
+            title: decodeURIComponent(params.event),
+            description: `Историческое событие в городе ${decodeURIComponent(params.city)}`,
+            date: decodeURIComponent(params.date),
+            coordinates: [59.9343, 30.3351] // Координаты Санкт-Петербурга по умолчанию
+        };
+
+        // Отображаем событие
+        APP.currentEvents = [event];
+        APP.currentEventIndex = 0;
+
+        // Очистка предыдущих маркеров
+        APP.markers.forEach(marker => marker.remove());
+        APP.markers = [];
+
+        // Добавление маркера
+        const marker = L.marker(event.coordinates).addTo(APP.map)
+            .bindPopup(`<b>${event.title}</b><br>${event.date}`);
+
+        APP.markers.push(marker);
+        marker.openPopup();
+
+        // Установка вида карты
+        APP.map.setView(event.coordinates, 12);
+
+        // Обновление информации о событии
+        displayEventInfo(event);
+        updateEventsList();
+        return true;
+    }
+
     // Инициализация приложения
-    async function init() {
+    function init() {
         if (APP.isInitialized) return;
 
-        try {
-            showLoading(true);
-            createBaseStructure();
-            setupEventHandlers();
-            initTimeline();
+        createBaseStructure();
+        setupEventHandlers();
+        initTimeline();
 
-            // Проверяем, есть ли событие в URL
-            const params = getUrlParams();
-            if (params.event && params.date && params.city) {
-                // Проверяем авторизацию
-                const savedUser = localStorage.getItem('currentUser');
-                if (savedUser) {
-                    APP.currentUser = JSON.parse(savedUser);
-                    displayEventFromUrl();
-                } else {
-                    showAuthModal();
-                }
-            } else {
-                // Если нет события в URL, проверяем авторизацию
-                checkAuth();
-            }
+        // Проверяем авторизацию
+        checkAuth();
 
-            APP.isInitialized = true;
-        } catch (error) {
-            console.error('Initialization error:', error);
-            alert('Ошибка инициализации: ' + error.message);
-        } finally {
-            showLoading(false);
-        }
+        APP.isInitialized = true;
     }
 
     // Создание базовой структуры страницы
@@ -211,7 +239,16 @@ document.addEventListener('DOMContentLoaded', function() {
             if (savedUser) {
                 APP.currentUser = JSON.parse(savedUser);
                 document.getElementById('cityInput').value = APP.currentUser.city || 'Санкт-Петербург';
-                displayDefaultEvent();
+
+                // Проверяем, есть ли событие в URL
+                const params = getUrlParams();
+                if (params.event && params.date && params.city) {
+                    // Если есть параметры из Telegram, показываем событие
+                    displayEventFromUrl();
+                } else {
+                    // Иначе загружаем все события
+                    loadUserEvents();
+                }
             } else {
                 showAuthModal();
             }
@@ -454,7 +491,6 @@ document.addEventListener('DOMContentLoaded', function() {
             <h2>${event.title}</h2>
             <p><strong>Дата:</strong> ${event.date}</p>
             <p>${event.description}</p>
-            <a href="${event.link}" target="_blank" rel="noopener noreferrer">Событие на карте</a>
         `;
     }
 
@@ -630,9 +666,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 localStorage.setItem('currentUser', JSON.stringify(APP.currentUser));
                 hideAuthModal();
 
-                // После регистрации проверяем, есть ли событие в URL
-                if (!displayEventFromUrl()) {
-                    displayDefaultEvent();
+                // Проверяем, есть ли событие в URL
+                const params = getUrlParams();
+                if (params.event && params.date && params.city) {
+                    // Если есть параметры из Telegram, показываем событие
+                    displayEventFromUrl();
+                } else {
+                    // Иначе загружаем все события
+                    loadUserEvents();
                 }
             } catch (error) {
                 console.error('Registration error:', error);
@@ -662,7 +703,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
 
                 localStorage.setItem('currentUser', JSON.stringify(APP.currentUser));
-                displayDefaultEvent();
+                loadUserEvents();
             } catch (error) {
                 console.error('Error applying settings:', error);
                 alert('Ошибка: ' + error.message);
@@ -707,56 +748,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 btn.textContent = 'Применить';
             }
         });
-    }
-
-    // Функция для получения параметров из URL
-    function getUrlParams() {
-        const params = new URLSearchParams(window.location.search);
-        return {
-            event: params.get('event'),
-            date: params.get('date'),
-            city: params.get('city')
-        };
-    }
-
-    // Функция для отображения события из URL
-    function displayEventFromUrl() {
-        const params = getUrlParams();
-        if (!params.event || !params.date || !params.city) {
-            return false;
-        }
-
-        // Создаем событие из параметров URL
-        const event = {
-            title: decodeURIComponent(params.event),
-            description: `Историческое событие в городе ${decodeURIComponent(params.city)}`,
-            date: decodeURIComponent(params.date),
-            coordinates: [59.9343, 30.3351], // Координаты Санкт-Петербурга по умолчанию
-            link: window.location.href
-        };
-
-        // Отображаем событие
-        APP.currentEvents = [event];
-        APP.currentEventIndex = 0;
-
-        // Очистка предыдущих маркеров
-        APP.markers.forEach(marker => marker.remove());
-        APP.markers = [];
-
-        // Добавление маркера
-        const marker = L.marker(event.coordinates).addTo(APP.map)
-            .bindPopup(`<b>${event.title}</b><br>${event.date}`);
-
-        APP.markers.push(marker);
-        marker.openPopup();
-
-        // Установка вида карты
-        APP.map.setView(event.coordinates, 12);
-
-        // Обновление информации о событии
-        displayEventInfo(event);
-        updateEventsList();
-        return true;
     }
 
     // Инициализация приложения

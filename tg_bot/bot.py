@@ -188,9 +188,9 @@ async def get_historical_event(user_id: int) -> str:
         formatted_date = requests.utils.quote(formatted_date)
         city = requests.utils.quote(city)
 
-        # Формируем ссылку с правильным форматированием для Telegram
+        # Формируем ссылку в формате Telegram
         url = f"https://mnstupichev.github.io/History-project/?event={event_label}&date={formatted_date}&city={city}"
-        message += f"\n🗺 <a href='{url}'>Событие на карте</a>"
+        message += f"\n🗺 [Событие на карте]({url})"
 
         return message
 
