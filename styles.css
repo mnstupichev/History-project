@@ -338,6 +338,10 @@ button:disabled {
         flex-direction: column;
     }
 
+    .map-container {
+        order: 1;
+    }
+
     #map {
         order: 1;
     }
