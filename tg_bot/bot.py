@@ -1,4 +1,4 @@
-import os
+import html
 import logging
 import requests
 import random
@@ -175,22 +175,20 @@ async def get_historical_event(user_id: int) -> str:
             formatted_date = event['date']
 
         # Формируем сообщение
-        message = f"📅 {formatted_date}\n\n"
-        message += f"📜 {event['label']}\n"
+        message = f"<b>📅 {html.escape(formatted_date)}</b>\n\n"
+        message += f"<b>📜 {html.escape(event['label'])}</b>\n"
 
         if event.get('description'):
-            message += f"\n📝 {event['description']}\n"
+            message += f"\n📝 {html.escape(event['description'])}\n"
 
-        message += f"\n🏙 {city}\n"
+        message += f"\n🏙 {html.escape(city)}\n"
 
-        # Кодируем параметры URL
+        # Формируем скрытую ссылку
         event_label = requests.utils.quote(event['label'])
-        formatted_date = requests.utils.quote(formatted_date)
-        city = requests.utils.quote(city)
-
-        # Формируем ссылку в формате Telegram
-        url = f"https://mnstupichev.github.io/History-project/?event={event_label}&date={formatted_date}&city={city}"
-        message += f"\n🗺 [Событие на карте]({url})"
+        formatted_date_url = requests.utils.quote(formatted_date)
+        city_url = requests.utils.quote(city)
+        url = f"https://mnstupichev.github.io/History-project/?event={event_label}&date={formatted_date_url}&city={city_url}"
+        message += f"\n🗺 <a href='{url}'>Событие на карте</a>"
 
         return message
 
@@ -330,6 +328,8 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         event = await get_historical_event(query.from_user.id)
         await query.edit_message_text(
             f"📜 Историческое событие:\n\n{event}\n\n",
+            parse_mode="HTML",
+            disable_web_page_preview=True,
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔁 Еще событие", callback_data='get_event')],
                 [InlineKeyboardButton("↩️ В главное меню", callback_data='back')]
@@ -481,9 +481,32 @@ async def send_daily_event(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     try:
         event = await get_historical_event(user_id)
+        if isinstance(event, str):  # Если вернулась строка с ошибкой
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"❌ {event}",
+                reply_markup=main_menu_keyboard()
+            )
+            return
+
+        # Формируем сообщение с правильной структурой данных
+        message = (
+            f"<b>📅 {html.escape(event['date'])}</b>\n\n"
+            f"<b>📜 {html.escape(event['title'])}</b>\n"
+        )
+
+        # Добавляем описание, если оно есть
+        if 'description' in event and event['description']:
+            message += f"\n📝 {html.escape(event['description'])}\n"
+
+        message += f"\n🏙 {html.escape(event['city'])}\n\n"
+        message += f"🗺 <a href='{event['url']}'>Событие на карте</a>"
+
         await context.bot.send_message(
             chat_id=user_id,
-            text=f"📜 Ежедневное историческое событие:\n\n{event}\n\n",
+            text=f"📜 Ежедневное историческое событие:\n\n{message}",
+            parse_mode='HTML',
+            disable_web_page_preview=True,
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔁 Еще событие", callback_data='get_event')],
                 [InlineKeyboardButton("↩️ В главное меню", callback_data='back')]
@@ -491,6 +514,11 @@ async def send_daily_event(context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     except Exception as e:
         logger.error(f"Error sending daily event to user {user_id}: {e}")
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="❌ Произошла ошибка при отправке события. Пожалуйста, попробуйте позже.",
+            reply_markup=main_menu_keyboard()
+        )
 
 
 async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
