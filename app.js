@@ -16,7 +16,8 @@ document.addEventListener('DOMContentLoaded', function() {
             date: "27.05.1703",
             coordinates: [59.9343, 30.3351],
             link: "https://mnstupichev.github.io/History-project/"
-        }
+        },
+        wikipediaCache: new Map(), // Кэш для хранения данных из Wikipedia
     };
 
     // Функция для получения параметров из URL
@@ -464,18 +465,25 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const data = await response.json();
 
-            return data.results.bindings.map(item => {
+            const events = await Promise.all(data.results.bindings.map(async item => {
                 const date = new Date(item.date.value);
                 const coord = item.coord?.value;
+                const title = item.eventLabel.value;
+
+                // Получаем дополнительную информацию из Wikipedia
+                const wikiInfo = await fetchWikipediaInfo(title);
 
                 return {
-                    title: item.eventLabel.value,
+                    title: title,
                     description: item.description?.value || 'Описание отсутствует',
                     date: date.toLocaleDateString('ru-RU'),
                     coordinates: coord ? parseCoordinates(coord) : null,
-                    wikidataUrl: item.event.value
+                    wikidataUrl: item.event.value,
+                    wikipediaInfo: wikiInfo
                 };
-            });
+            }));
+
+            return events;
         } catch (error) {
             console.error('Error fetching events:', error);
             throw new Error('Не удалось загрузить события. Проверьте подключение к интернету и попробуйте снова.');
@@ -541,12 +549,58 @@ document.addEventListener('DOMContentLoaded', function() {
         APP.currentEvents.forEach((event, index) => {
             const eventElement = document.createElement('div');
             eventElement.className = 'event-item';
+            
             eventElement.innerHTML = `
-                <h4>${event.title}</h4>
-                <p>${event.date}</p>
+                <div class="event-header">
+                    <h4>${event.title}</h4>
+                    <div class="event-date">${event.date}</div>
+                </div>
+                <div class="event-description">${event.description}</div>
+                <div class="event-details">
+                    ${event.wikipediaInfo ? `
+                        <div class="event-wikipedia-preview">
+                            <p>${event.wikipediaInfo.extract.substring(0, 150)}...</p>
+                            <a href="${event.wikipediaInfo.url}" target="_blank" rel="noopener noreferrer" class="wikipedia-link">
+                                Читать на Wikipedia
+                            </a>
+                        </div>
+                    ` : ''}
+                    ${event.wikidataUrl ? `
+                        <p class="event-source">
+                            <a href="${event.wikidataUrl}" target="_blank" rel="noopener noreferrer">
+                                Подробнее на Wikidata
+                            </a>
+                        </p>
+                    ` : ''}
+                    ${event.coordinates ? `
+                        <p class="event-location">
+                            <span class="location-icon">📍</span>
+                            Местоположение: ${formatCoordinates(event.coordinates)}
+                        </p>
+                    ` : `
+                        <p class="no-coords">Местоположение не указано</p>
+                    `}
+                    ${event.tags ? `
+                        <div class="event-tags">
+                            ${event.tags.map(tag => `<span class="event-tag">${tag}</span>`).join('')}
+                        </div>
+                    ` : ''}
+                </div>
             `;
 
+            // Добавляем обработчик клика для раскрытия/скрытия деталей
             eventElement.addEventListener('click', () => {
+                // Закрываем все остальные события
+                document.querySelectorAll('.event-item.expanded').forEach(item => {
+                    if (item !== eventElement) {
+                        item.classList.remove('expanded');
+                    }
+                });
+                
+                // Переключаем текущее событие
+                eventElement.classList.toggle('expanded');
+                
+                // Обновляем карту и информацию
                 APP.currentEventIndex = index;
                 if (event.coordinates) {
                     APP.map.setView(event.coordinates, 12);
@@ -566,10 +620,59 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!eventInfoElement) return;
 
         eventInfoElement.innerHTML = `
-            <h2>${event.title}</h2>
-            <p><strong>Дата:</strong> ${event.date}</p>
-            <p>${event.description}</p>
+            <div class="event-info-content">
+                <h2>${event.title}</h2>
+                <div class="event-info-date">${event.date}</div>
+                <div class="event-info-description">${event.description}</div>
+                
+                ${event.wikipediaInfo ? `
+                    <div class="event-wikipedia-info">
+                        <h3>Подробная информация</h3>
+                        ${event.wikipediaInfo.imageUrl ? `
+                            <div class="event-image">
+                                <img src="${event.wikipediaInfo.imageUrl}" alt="${event.title}" loading="lazy">
+                            </div>
+                        ` : ''}
+                        <div class="event-wikipedia-extract">${event.wikipediaInfo.extract}</div>
+                        <div class="event-wikipedia-source">
+                            <a href="${event.wikipediaInfo.url}" target="_blank" rel="noopener noreferrer">
+                                Читать полную статью на Wikipedia
+                            </a>
+                        </div>
+                    </div>
+                ` : ''}
+                
+                ${event.wikidataUrl ? `
+                    <div class="event-info-source">
+                        <a href="${event.wikidataUrl}" target="_blank" rel="noopener noreferrer">
+                            Подробнее на Wikidata
+                        </a>
+                    </div>
+                ` : ''}
+                
+                ${event.coordinates ? `
+                    <div class="event-info-location">
+                        <span class="location-icon">📍</span>
+                        Местоположение: ${formatCoordinates(event.coordinates)}
+                    </div>
+                ` : `
+                    <div class="no-coords-info">Местоположение не указано</div>
+                `}
+                
+                ${event.tags ? `
+                    <div class="event-info-tags">
+                        ${event.tags.map(tag => `<span class="event-tag">${tag}</span>`).join('')}
+                    </div>
+                ` : ''}
+            </div>
         `;
+    }
+
+    // Вспомогательная функция для форматирования координат
+    function formatCoordinates(coords) {
+        if (!coords) return '';
+        const [lat, lng] = coords;
+        return `${lat.toFixed(4)}°, ${lng.toFixed(4)}°`;
     }
 
     // Создание модального окна авторизации
@@ -856,6 +959,54 @@ document.addEventListener('DOMContentLoaded', function() {
                 btn.textContent = 'Применить';
             }
         });
+    }
+
+    // Функция для получения информации из Wikipedia
+    async function fetchWikipediaInfo(title) {
+        // Проверяем кэш
+        if (APP.wikipediaCache.has(title)) {
+            return APP.wikipediaCache.get(title);
+        }
+
+        try {
+            // Сначала ищем страницу по названию
+            const searchUrl = `https://ru.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(title)}&format=json&origin=*`;
+            const searchResponse = await fetch(searchUrl);
+            const searchData = await searchResponse.json();
+
+            if (!searchData.query?.search?.length) {
+                return null;
+            }
+
+            // Берем первый результат поиска
+            const pageId = searchData.query.search[0].pageid;
+            
+            // Получаем полную информацию о странице
+            const pageUrl = `https://ru.wikipedia.org/w/api.php?action=query&pageids=${pageId}&prop=extracts|pageimages|info&exintro=1&explaintext=1&inprop=url&format=json&origin=*`;
+            const pageResponse = await fetch(pageUrl);
+            const pageData = await pageResponse.json();
+
+            const page = pageData.query.pages[pageId];
+            if (!page) {
+                return null;
+            }
+
+            // Формируем объект с информацией
+            const wikiInfo = {
+                title: page.title,
+                extract: page.extract,
+                url: page.fullurl,
+                imageUrl: page.thumbnail?.source || null,
+                lastModified: page.touched
+            };
+
+            // Сохраняем в кэш
+            APP.wikipediaCache.set(title, wikiInfo);
+            return wikiInfo;
+        } catch (error) {
+            console.error('Error fetching Wikipedia info:', error);
+            return null;
+        }
     }
 
     // Инициализация приложения
