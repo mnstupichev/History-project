@@ -557,9 +557,19 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             const events = [];
             const processedTitles = new Set();
+            const processedPageIds = new Set();
 
-            // Функция для поиска связанных статей
-            async function findRelatedArticles(pageId) {
+            // Функция для получения информации о страницах одним запросом
+            async function fetchPagesInfo(pageIds) {
+                if (!pageIds.length) return [];
+                const pagesUrl = `https://ru.wikipedia.org/w/api.php?action=query&pageids=${pageIds.join('|')}&prop=extracts|pageimages|info|categories&exintro=1&explaintext=1&inprop=url&format=json&origin=*&cllimit=50`;
+                const response = await fetch(pagesUrl);
+                const data = await response.json();
+                return Object.values(data.query.pages);
+            }
+
+            // Функция для получения связанных статей
+            async function fetchRelatedArticles(pageId) {
                 const relatedUrl = `https://ru.wikipedia.org/w/api.php?action=query&pageids=${pageId}&prop=links&pllimit=500&format=json&origin=*`;
                 const response = await fetch(relatedUrl);
                 const data = await response.json();
@@ -568,46 +578,40 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Функция для обработки одной страницы
             async function processPage(page) {
-                if (processedTitles.has(page.title)) return;
+                if (processedPageIds.has(page.pageid) || processedTitles.has(page.title)) return;
+                
+                processedPageIds.add(page.pageid);
                 processedTitles.add(page.title);
 
-                // Получаем категории страницы
+                // Проверяем категории и связь с городом
                 const categories = page.categories?.map(cat => cat.title.toLowerCase()) || [];
-                
-                // Расширенный список исторических категорий
-                const historicalCategories = [
-                    'история', 'события', 'даты', 'хронология', 'исторические события',
-                    'исторические даты', 'исторические места', 'памятные даты',
-                    'исторические личности', 'исторические здания', 'исторические памятники'
-                ];
-
-                // Проверяем, что страница относится к истории
                 const isHistorical = categories.some(cat => 
-                    historicalCategories.some(histCat => cat.includes(histCat))
+                    cat.includes('история') || 
+                    cat.includes('события') || 
+                    cat.includes('даты') ||
+                    cat.includes('хронология')
                 );
 
-                // Проверяем связь с городом
                 const isCityRelated = 
                     categories.some(cat => cat.toLowerCase().includes(city.toLowerCase())) ||
                     page.extract.toLowerCase().includes(city.toLowerCase());
 
                 if (!isHistorical || !isCityRelated) return;
 
-                // Ищем даты в тексте (поддерживаем разные форматы)
+                // Ищем даты в тексте
                 const datePatterns = [
-                    /(\d{1,2}\.\d{1,2}\.\d{4})/g,  // 01.01.2024
-                    /(\d{1,2}\s+[а-яА-Я]+\s+\d{4})/g,  // 1 января 2024
-                    /(\d{4}\s+год)/g,  // 2024 год
-                    /(в\s+\d{4}\s+году)/g  // в 2024 году
+                    /(\d{1,2}\.\d{1,2}\.\d{4})/g,
+                    /(\d{1,2}\s+[а-яА-Я]+\s+\d{4})/g,
+                    /(\d{4}\s+год)/g,
+                    /(в\s+\d{4}\s+году)/g
                 ];
 
-                let dates = [];
+                const dates = new Set();
                 for (const pattern of datePatterns) {
                     const matches = page.extract.matchAll(pattern);
                     for (const match of matches) {
                         let date = match[0];
                         
-                        // Преобразуем дату в стандартный формат
                         if (date.includes(' ')) {
                             const months = {
                                 'января': '01', 'февраля': '02', 'марта': '03', 'апреля': '04',
@@ -616,25 +620,22 @@ document.addEventListener('DOMContentLoaded', function() {
                             };
                             
                             if (date.includes('год')) {
-                                // Для формата "2024 год" или "в 2024 году"
                                 const year = date.match(/\d{4}/)[0];
                                 date = `01.01.${year}`;
                             } else {
-                                // Для формата "1 января 2024"
                                 const [day, month, year] = date.split(' ');
                                 date = `${day.padStart(2, '0')}.${months[month.toLowerCase()]}.${year}`;
                             }
                         }
 
-                        // Проверяем, что дата входит в заданный период
                         const eventDate = new Date(date.split('.').reverse().join('-'));
                         if (eventDate.getFullYear() >= startYear && eventDate.getFullYear() <= endYear) {
-                            dates.push(date);
+                            dates.add(date);
                         }
                     }
                 }
 
-                if (dates.length > 0) {
+                if (dates.size > 0) {
                     // Получаем изображение для события
                     const wikiInfo = await fetchWikipediaInfo(page.title);
 
@@ -642,7 +643,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     for (const date of dates) {
                         events.push({
                             title: page.title,
-                            description: page.extract.split('\n')[0], // Берем первый абзац
+                            description: page.extract.split('\n')[0],
                             date: date,
                             coordinates: null,
                             wikipediaInfo: wikiInfo,
@@ -652,7 +653,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
 
                     // Ищем связанные статьи
-                    const relatedLinks = await findRelatedArticles(page.pageid);
+                    const relatedLinks = await fetchRelatedArticles(page.pageid);
                     for (const link of relatedLinks) {
                         if (!processedTitles.has(link.title)) {
                             const relatedPageUrl = `https://ru.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(link.title)}&prop=extracts|pageimages|info|categories&exintro=1&explaintext=1&inprop=url&format=json&origin=*&cllimit=50`;
@@ -676,24 +677,25 @@ document.addEventListener('DOMContentLoaded', function() {
                 `${city} хронология`
             ];
 
+            // Собираем все найденные pageIds
+            const allPageIds = new Set();
             for (const query of searchQueries) {
-                const searchUrl = `https://ru.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&origin=*&srlimit=100`;
+                const searchUrl = `https://ru.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&origin=*&srlimit=50`;
                 const searchResponse = await fetch(searchUrl);
                 const searchData = await searchResponse.json();
 
                 if (searchData.query?.search?.length) {
-                    const pageIds = searchData.query.search.map(result => result.pageid).join('|');
-                    const pagesUrl = `https://ru.wikipedia.org/w/api.php?action=query&pageids=${pageIds}&prop=extracts|pageimages|info|categories&exintro=1&explaintext=1&inprop=url&format=json&origin=*&cllimit=50`;
-                    
-                    const pagesResponse = await fetch(pagesUrl);
-                    const pagesData = await pagesResponse.json();
+                    searchData.query.search.forEach(result => allPageIds.add(result.pageid));
+                }
+            }
 
-                    // Обрабатываем каждую найденную страницу
-                    for (const page of Object.values(pagesData.query.pages)) {
-                        if (!page.missing) {
-                            await processPage(page);
-                        }
-                    }
+            // Получаем информацию о всех найденных страницах одним запросом
+            const pages = await fetchPagesInfo(Array.from(allPageIds));
+            
+            // Обрабатываем каждую страницу
+            for (const page of pages) {
+                if (!page.missing) {
+                    await processPage(page);
                 }
             }
 
@@ -1199,7 +1201,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Берем первый результат поиска
             const pageId = searchData.query.search[0].pageid;
             
-            // Получаем полную информацию о странице, включая изображения
+            // Получаем основную информацию о странице
             const pageUrl = `https://ru.wikipedia.org/w/api.php?action=query&pageids=${pageId}&prop=extracts|pageimages|images|info&exintro=1&explaintext=1&inprop=url&format=json&origin=*&pithumbsize=1000`;
             const pageResponse = await fetch(pageUrl);
             const pageData = await pageResponse.json();
@@ -1209,16 +1211,25 @@ document.addEventListener('DOMContentLoaded', function() {
                 return null;
             }
 
-            // Получаем лучшее изображение для страницы
-            let bestImageUrl = null;
+            // Формируем базовую информацию
+            const wikiInfo = {
+                title: page.title,
+                extract: page.extract,
+                url: page.fullurl,
+                imageUrl: null,
+                lastModified: page.touched
+            };
+
+            // Если есть thumbnail, используем его
             if (page.thumbnail) {
-                // Используем изображение из thumbnail, но в большем размере
-                bestImageUrl = page.thumbnail.source.replace(/\/\d+px-/, '/1000px-');
-            } else if (page.images) {
-                // Если нет thumbnail, ищем подходящее изображение в списке
+                wikiInfo.imageUrl = page.thumbnail.source.replace(/\/\d+px-/, '/1000px-');
+            }
+            // Если нет thumbnail, ищем изображения
+            else if (page.images) {
+                // Берем первые 3 изображения для оптимизации
                 const imagePromises = page.images
                     .filter(img => !img.title.includes('icon') && !img.title.includes('logo'))
-                    .slice(0, 5) // Берем первые 5 изображений
+                    .slice(0, 3)
                     .map(async img => {
                         const imageTitle = img.title.replace(/^File:/, '');
                         const imageInfoUrl = `https://ru.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(imageTitle)}&prop=imageinfo&iiprop=url|size|mime&format=json&origin=*`;
@@ -1241,33 +1252,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 const validImages = imageResults.filter(img => img !== null);
                 
                 if (validImages.length > 0) {
-                    // Выбираем изображение с наилучшим соотношением сторон и размером
-                    bestImageUrl = validImages
+                    // Выбираем изображение с наилучшим соотношением сторон
+                    wikiInfo.imageUrl = validImages
                         .sort((a, b) => {
                             const ratioA = a.width / a.height;
                             const ratioB = b.width / b.height;
-                            // Предпочитаем изображения с соотношением сторон ближе к 16:9
                             const targetRatio = 16/9;
-                            const ratioDiffA = Math.abs(ratioA - targetRatio);
-                            const ratioDiffB = Math.abs(ratioB - targetRatio);
-                            
-                            if (Math.abs(ratioDiffA - ratioDiffB) < 0.1) {
-                                // Если соотношения сторон близки, выбираем большее изображение
-                                return b.size - a.size;
-                            }
-                            return ratioDiffA - ratioDiffB;
+                            return Math.abs(ratioA - targetRatio) - Math.abs(ratioB - targetRatio);
                         })[0].url;
                 }
             }
-
-            // Формируем объект с информацией
-            const wikiInfo = {
-                title: page.title,
-                extract: page.extract,
-                url: page.fullurl,
-                imageUrl: bestImageUrl,
-                lastModified: page.touched
-            };
 
             // Сохраняем в кэш
             APP.wikipediaCache.set(title, wikiInfo);
