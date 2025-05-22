@@ -7,8 +7,8 @@ document.addEventListener('DOMContentLoaded', function() {
         isInitialized: false,
         cityWikidataId: null,
         markers: [],
-        timelineStartYear: 1000,
-        timelineEndYear: 2000,
+        timelineStartYear: 1400,
+        timelineEndYear: 1700,
         hasProcessedUrlParams: false,
         defaultEvent: {
             title: "Основание Санкт-Петербурга",
@@ -141,16 +141,18 @@ document.addEventListener('DOMContentLoaded', function() {
             const endPercent = (parseInt(endHandle.style.left) || timelineWidth) / timelineWidth * 100;
 
             const minYear = 1000;
-            const maxYear = new Date().getFullYear();
+            const maxYear = 2100;  // Изменено с 2000 на 2100 для компенсации размера слайдера
 
             const startYear = Math.round(minYear + (maxYear - minYear) * (startPercent / 100));
             const endYear = Math.round(minYear + (maxYear - minYear) * (endPercent / 100));
 
-            startYearElement.textContent = startYear;
-            endYearElement.textContent = endYear;
+            // Ограничиваем отображаемый год до 2000
+            startYearElement.textContent = Math.min(startYear, 2000);
+            endYearElement.textContent = Math.min(endYear, 2000);
 
-            APP.timelineStartYear = startYear;
-            APP.timelineEndYear = endYear;
+            // Сохраняем реальные значения для вычислений
+            APP.timelineStartYear = Math.min(startYear, 2000);
+            APP.timelineEndYear = Math.min(endYear, 2000);
         }
 
         function moveHandle(handle, position) {
@@ -174,10 +176,27 @@ document.addEventListener('DOMContentLoaded', function() {
             updateYears();
         }
 
+        // Инициализация позиций слайдеров для периода 1400-1700
+        function initializeSliderPositions() {
+            const timelineWidth = timeline.offsetWidth;
+            const handleWidth = startHandle.offsetWidth;
+            const minYear = 1000;
+            const maxYear = 2100;  // Изменено с 2000 на 2100
+            
+            // Вычисляем позиции для 1400 и 1700 годов
+            const startPosition = ((APP.timelineStartYear - minYear) / (maxYear - minYear)) * (timelineWidth - handleWidth);
+            const endPosition = ((APP.timelineEndYear - minYear) / (maxYear - minYear)) * (timelineWidth - handleWidth);
+            
+            startHandle.style.left = `${startPosition}px`;
+            endHandle.style.left = `${endPosition}px`;
+            
+            // Обновляем отображение годов
+            startYearElement.textContent = APP.timelineStartYear;
+            endYearElement.textContent = APP.timelineEndYear;
+        }
+
         // Инициализация позиций
-        startHandle.style.left = '0px';
-        endHandle.style.left = (timeline.offsetWidth - endHandle.offsetWidth) + 'px';
-        updateYears();
+        initializeSliderPositions();
 
         // Обработчики событий для ручек
         [startHandle, endHandle].forEach(handle => {
@@ -290,26 +309,30 @@ document.addEventListener('DOMContentLoaded', function() {
     function displayDefaultEvent() {
         if (!APP.map) return;
 
-        APP.currentEvents = [APP.defaultEvent];
-        APP.currentEventIndex = 0;
-
-        // Очистка предыдущих маркеров
+        // Очищаем предыдущие маркеры
         APP.markers.forEach(marker => marker.remove());
         APP.markers = [];
 
-        // Добавление маркера
+        // Очищаем список событий
+        document.getElementById('eventsListContainer').innerHTML = '';
+        document.getElementById('eventsCount').textContent = '0';
+
+        // Устанавливаем событие по умолчанию
+        APP.currentEvents = [APP.defaultEvent];
+        APP.currentEventIndex = 0;
+
+        // Добавляем маркер
         const marker = L.marker(APP.defaultEvent.coordinates).addTo(APP.map)
             .bindPopup(`<b>${APP.defaultEvent.title}</b><br>${APP.defaultEvent.date}`);
 
         APP.markers.push(marker);
         marker.openPopup();
 
-        // Установка вида карты
+        // Устанавливаем вид карты
         APP.map.setView(APP.defaultEvent.coordinates, 12);
 
-        // Обновление информации о событии
+        // Обновляем информацию о событии
         displayEventInfo(APP.defaultEvent);
-        updateEventsList();
     }
 
     // Поиск Wikidata ID для города
@@ -432,61 +455,252 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Получение исторических событий с Wikidata
+    // Получение исторических событий с Wikidata и Wikipedia
     async function fetchHistoricalEvents(startYear, endYear) {
         if (!APP.cityWikidataId) return [];
 
         try {
-            const query = `
-                SELECT DISTINCT ?event ?eventLabel ?date ?coord ?description WHERE {
-                    ?event wdt:P276/wdt:P131* wd:${APP.cityWikidataId};
-                           wdt:P585 ?date;
-                           wdt:P625 ?coord.
-                    
-                    OPTIONAL { ?event schema:description ?description. FILTER(LANG(?description) = "ru") }
-                    
-                    FILTER(YEAR(?date) >= ${startYear} && YEAR(?date) <= ${endYear})
-                    FILTER(EXISTS { ?event rdfs:label ?eventLabel. FILTER(LANG(?eventLabel) = "ru") })
-                    
-                    SERVICE wikibase:label { bd:serviceParam wikibase:language "ru". }
+            // Получаем события из Wikidata
+            const wikidataEvents = await fetchWikidataEvents(startYear, endYear);
+            
+            // Получаем события из Wikipedia
+            const wikipediaEvents = await fetchWikipediaEvents(APP.currentUser.city, startYear, endYear);
+            
+            // Объединяем события, избегая дубликатов
+            const allEvents = [...wikidataEvents];
+            
+            // Добавляем уникальные события из Wikipedia
+            wikipediaEvents.forEach(wikiEvent => {
+                const isDuplicate = allEvents.some(event => 
+                    event.title === wikiEvent.title || 
+                    (event.date === wikiEvent.date && 
+                     Math.abs(new Date(event.date) - new Date(wikiEvent.date)) < 86400000) // 1 день в миллисекундах
+                );
+                
+                if (!isDuplicate) {
+                    allEvents.push(wikiEvent);
                 }
-                ORDER BY ?date
-                LIMIT 100`;
-
-            const url = `https://query.wikidata.org/sparql?query=${encodeURIComponent(query)}&format=json`;
-
-            const response = await fetch(url, {
-                headers: { 'Accept': 'application/json' }
             });
 
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-
-            const data = await response.json();
-
-            const events = await Promise.all(data.results.bindings.map(async item => {
-                const date = new Date(item.date.value);
-                const coord = item.coord?.value;
-                const title = item.eventLabel.value;
-
-                // Получаем дополнительную информацию из Wikipedia
-                const wikiInfo = await fetchWikipediaInfo(title);
-
-                return {
-                    title: title,
-                    description: item.description?.value || 'Описание отсутствует',
-                    date: date.toLocaleDateString('ru-RU'),
-                    coordinates: coord ? parseCoordinates(coord) : null,
-                    wikidataUrl: item.event.value,
-                    wikipediaInfo: wikiInfo
-                };
-            }));
-
-            return events;
+            // Сортируем все события по дате
+            return allEvents.sort((a, b) => new Date(a.date) - new Date(b.date));
         } catch (error) {
             console.error('Error fetching events:', error);
             throw new Error('Не удалось загрузить события. Проверьте подключение к интернету и попробуйте снова.');
+        }
+    }
+
+    // Получение событий из Wikidata
+    async function fetchWikidataEvents(startYear, endYear) {
+        const query = `
+            SELECT DISTINCT ?event ?eventLabel ?date ?coord ?description WHERE {
+                {
+                    # События, произошедшие в городе
+                    ?event wdt:P276/wdt:P131* wd:${APP.cityWikidataId};
+                           wdt:P585 ?date.
+                } UNION {
+                    # События, связанные с городом через другие свойства
+                    ?event wdt:P276/wdt:P131* wd:${APP.cityWikidataId};
+                           wdt:P585 ?date.
+                    ?event wdt:P276 ?location.
+                    ?location wdt:P131* wd:${APP.cityWikidataId}.
+                } UNION {
+                    # События, упоминающие город в описании
+                    ?event wdt:P585 ?date;
+                           schema:description ?description.
+                    FILTER(CONTAINS(LCASE(?description), LCASE("${APP.currentUser.city}")))
+                }
+                
+                OPTIONAL { ?event wdt:P625 ?coord. }
+                OPTIONAL { ?event schema:description ?description. FILTER(LANG(?description) = "ru") }
+                
+                # Более гибкая фильтрация по дате
+                BIND(YEAR(?date) AS ?year)
+                FILTER(?year >= ${startYear} && ?year <= ${endYear})
+                
+                # Проверяем наличие русского названия
+                FILTER(EXISTS { ?event rdfs:label ?eventLabel. FILTER(LANG(?eventLabel) = "ru") })
+                
+                SERVICE wikibase:label { bd:serviceParam wikibase:language "ru". }
+            }
+            ORDER BY ?date
+            LIMIT 200`;
+
+        const url = `https://query.wikidata.org/sparql?query=${encodeURIComponent(query)}&format=json`;
+        const response = await fetch(url, { headers: { 'Accept': 'application/json' } });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        return await Promise.all(data.results.bindings.map(async item => {
+            const date = new Date(item.date.value);
+            const coord = item.coord?.value;
+            const title = item.eventLabel.value;
+            const wikiInfo = await fetchWikipediaInfo(title);
+
+            return {
+                title: title,
+                description: item.description?.value || 'Описание отсутствует',
+                date: date.toLocaleDateString('ru-RU'),
+                coordinates: coord ? parseCoordinates(coord) : null,
+                wikidataUrl: item.event.value,
+                wikipediaInfo: wikiInfo,
+                source: 'wikidata'
+            };
+        }));
+    }
+
+    // Получение событий из Wikipedia
+    async function fetchWikipediaEvents(city, startYear, endYear) {
+        try {
+            const events = [];
+            const processedTitles = new Set();
+
+            // Функция для поиска связанных статей
+            async function findRelatedArticles(pageId) {
+                const relatedUrl = `https://ru.wikipedia.org/w/api.php?action=query&pageids=${pageId}&prop=links&pllimit=500&format=json&origin=*`;
+                const response = await fetch(relatedUrl);
+                const data = await response.json();
+                return data.query?.pages[pageId]?.links || [];
+            }
+
+            // Функция для обработки одной страницы
+            async function processPage(page) {
+                if (processedTitles.has(page.title)) return;
+                processedTitles.add(page.title);
+
+                // Получаем категории страницы
+                const categories = page.categories?.map(cat => cat.title.toLowerCase()) || [];
+                
+                // Расширенный список исторических категорий
+                const historicalCategories = [
+                    'история', 'события', 'даты', 'хронология', 'исторические события',
+                    'исторические даты', 'исторические места', 'памятные даты',
+                    'исторические личности', 'исторические здания', 'исторические памятники'
+                ];
+
+                // Проверяем, что страница относится к истории
+                const isHistorical = categories.some(cat => 
+                    historicalCategories.some(histCat => cat.includes(histCat))
+                );
+
+                // Проверяем связь с городом
+                const isCityRelated = 
+                    categories.some(cat => cat.toLowerCase().includes(city.toLowerCase())) ||
+                    page.extract.toLowerCase().includes(city.toLowerCase());
+
+                if (!isHistorical || !isCityRelated) return;
+
+                // Ищем даты в тексте (поддерживаем разные форматы)
+                const datePatterns = [
+                    /(\d{1,2}\.\d{1,2}\.\d{4})/g,  // 01.01.2024
+                    /(\d{1,2}\s+[а-яА-Я]+\s+\d{4})/g,  // 1 января 2024
+                    /(\d{4}\s+год)/g,  // 2024 год
+                    /(в\s+\d{4}\s+году)/g  // в 2024 году
+                ];
+
+                let dates = [];
+                for (const pattern of datePatterns) {
+                    const matches = page.extract.matchAll(pattern);
+                    for (const match of matches) {
+                        let date = match[0];
+                        
+                        // Преобразуем дату в стандартный формат
+                        if (date.includes(' ')) {
+                            const months = {
+                                'января': '01', 'февраля': '02', 'марта': '03', 'апреля': '04',
+                                'мая': '05', 'июня': '06', 'июля': '07', 'августа': '08',
+                                'сентября': '09', 'октября': '10', 'ноября': '11', 'декабря': '12'
+                            };
+                            
+                            if (date.includes('год')) {
+                                // Для формата "2024 год" или "в 2024 году"
+                                const year = date.match(/\d{4}/)[0];
+                                date = `01.01.${year}`;
+                            } else {
+                                // Для формата "1 января 2024"
+                                const [day, month, year] = date.split(' ');
+                                date = `${day.padStart(2, '0')}.${months[month.toLowerCase()]}.${year}`;
+                            }
+                        }
+
+                        // Проверяем, что дата входит в заданный период
+                        const eventDate = new Date(date.split('.').reverse().join('-'));
+                        if (eventDate.getFullYear() >= startYear && eventDate.getFullYear() <= endYear) {
+                            dates.push(date);
+                        }
+                    }
+                }
+
+                if (dates.length > 0) {
+                    // Получаем изображение для события
+                    const wikiInfo = await fetchWikipediaInfo(page.title);
+
+                    // Создаем событие для каждой найденной даты
+                    for (const date of dates) {
+                        events.push({
+                            title: page.title,
+                            description: page.extract.split('\n')[0], // Берем первый абзац
+                            date: date,
+                            coordinates: null,
+                            wikipediaInfo: wikiInfo,
+                            source: 'wikipedia',
+                            url: page.fullurl
+                        });
+                    }
+
+                    // Ищем связанные статьи
+                    const relatedLinks = await findRelatedArticles(page.pageid);
+                    for (const link of relatedLinks) {
+                        if (!processedTitles.has(link.title)) {
+                            const relatedPageUrl = `https://ru.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(link.title)}&prop=extracts|pageimages|info|categories&exintro=1&explaintext=1&inprop=url&format=json&origin=*&cllimit=50`;
+                            const relatedResponse = await fetch(relatedPageUrl);
+                            const relatedData = await relatedResponse.json();
+                            const relatedPage = Object.values(relatedData.query.pages)[0];
+                            
+                            if (relatedPage && !relatedPage.missing) {
+                                await processPage(relatedPage);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Начальный поиск
+            const searchQueries = [
+                `${city} ${startYear}..${endYear} история`,
+                `${city} исторические события`,
+                `${city} памятные даты`,
+                `${city} хронология`
+            ];
+
+            for (const query of searchQueries) {
+                const searchUrl = `https://ru.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&origin=*&srlimit=100`;
+                const searchResponse = await fetch(searchUrl);
+                const searchData = await searchResponse.json();
+
+                if (searchData.query?.search?.length) {
+                    const pageIds = searchData.query.search.map(result => result.pageid).join('|');
+                    const pagesUrl = `https://ru.wikipedia.org/w/api.php?action=query&pageids=${pageIds}&prop=extracts|pageimages|info|categories&exintro=1&explaintext=1&inprop=url&format=json&origin=*&cllimit=50`;
+                    
+                    const pagesResponse = await fetch(pagesUrl);
+                    const pagesData = await pagesResponse.json();
+
+                    // Обрабатываем каждую найденную страницу
+                    for (const page of Object.values(pagesData.query.pages)) {
+                        if (!page.missing) {
+                            await processPage(page);
+                        }
+                    }
+                }
+            }
+
+            return events;
+        } catch (error) {
+            console.error('Error fetching Wikipedia events:', error);
+            return [];
         }
     }
 
@@ -823,19 +1037,9 @@ document.addEventListener('DOMContentLoaded', function() {
         APP.markers.forEach(marker => marker.remove());
         APP.markers = [];
 
-        // Очищаем информацию о событии
-        document.getElementById('eventInfo').innerHTML = `
-            <h2>Выберите местоположение и временной период</h2>
-            <p>После регистрации и выбора параметров здесь будет отображаться информация о исторических событиях.</p>
-        `;
-
-        // Очищаем список событий
-        document.getElementById('eventsListContainer').innerHTML = '';
-        document.getElementById('eventsCount').textContent = '0';
-
-        // Сбрасываем временной промежуток
-        APP.timelineStartYear = 1000;
-        APP.timelineEndYear = 2000;
+        // Сбрасываем временной промежуток на значения по умолчанию
+        APP.timelineStartYear = 1400;
+        APP.timelineEndYear = 1700;
 
         // Скрываем профиль и показываем форму авторизации
         document.getElementById('profileContainer').style.display = 'none';
@@ -850,13 +1054,25 @@ document.addEventListener('DOMContentLoaded', function() {
         const timeline = document.querySelector('.timeline');
 
         if (startHandle && endHandle && timeline) {
-            startHandle.style.left = '0px';
-            endHandle.style.left = (timeline.offsetWidth - endHandle.offsetWidth) + 'px';
-
+            const timelineWidth = timeline.offsetWidth;
+            const handleWidth = startHandle.offsetWidth;
+            const minYear = 1000;
+            const maxYear = 2100;  // Изменено с 2000 на 2100
+            
+            // Вычисляем позиции для 1400 и 1700 годов
+            const startPosition = ((APP.timelineStartYear - minYear) / (maxYear - minYear)) * (timelineWidth - handleWidth);
+            const endPosition = ((APP.timelineEndYear - minYear) / (maxYear - minYear)) * (timelineWidth - handleWidth);
+            
+            startHandle.style.left = `${startPosition}px`;
+            endHandle.style.left = `${endPosition}px`;
+            
             // Обновляем отображение годов
             document.getElementById('startYear').textContent = APP.timelineStartYear;
             document.getElementById('endYear').textContent = APP.timelineEndYear;
         }
+
+        // Показываем событие по умолчанию
+        displayDefaultEvent();
     }
 
     // Настройка обработчиков событий
@@ -915,7 +1131,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Сбрасываем cityWikidataId, чтобы он был получен заново
                 APP.cityWikidataId = null;
 
-                // Всегда загружаем события для выбранного города, игнорируя параметры URL
+                // Загружаем события для выбранного города
                 await loadUserEvents();
             } catch (error) {
                 console.error('Error applying settings:', error);
