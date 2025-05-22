@@ -85,12 +85,13 @@ nav a:hover {
     flex-grow: 1;
     display: flex;
     flex-direction: column;
+    height: 600px;
 }
 
 #eventsListContainer {
     flex-grow: 1;
     overflow-y: auto;
-    max-height: none;
+    padding-right: 10px;
 }
 
 .event-item {
@@ -597,6 +598,13 @@ button:disabled {
     background-color: #f8f9fa;
     border-radius: 8px;
     border: 1px solid #e9ecef;
+    display: flex;
+    gap: 20px;
+}
+
+.event-wikipedia-content {
+    flex: 1;
+    min-width: 0;
 }
 
 .event-wikipedia-info h3 {
@@ -606,15 +614,17 @@ button:disabled {
 }
 
 .event-image {
-    margin-bottom: 15px;
-    text-align: center;
+    flex-shrink: 0;
+    width: 300px;
+    margin-bottom: 0;
 }
 
 .event-image img {
-    max-width: 100%;
+    width: 100%;
     height: auto;
     border-radius: 4px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    object-fit: cover;
 }
 
 .event-wikipedia-extract {
@@ -676,14 +686,39 @@ button:disabled {
 /* Адаптивные стили для Wikipedia информации */
 @media screen and (max-width: 768px) {
     .event-wikipedia-info {
+        flex-direction: column;
         padding: 15px;
+    }
+
+    .event-image {
+        width: 100%;
+        margin-bottom: 15px;
     }
 
     .event-wikipedia-extract {
         font-size: 14px;
     }
 
-    .event-image img {
-        max-width: 100%;
+    .events-list {
+        height: 400px;
     }
+}
+
+/* Стилизация скроллбара */
+#eventsListContainer::-webkit-scrollbar {
+    width: 8px;
+}
+
+#eventsListContainer::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+#eventsListContainer::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 4px;
+}
+
+#eventsListContainer::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
 }

@@ -627,18 +627,20 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 ${event.wikipediaInfo ? `
                     <div class="event-wikipedia-info">
-                        <h3>Подробная информация</h3>
+                        <div class="event-wikipedia-content">
+                            <h3>Подробная информация</h3>
+                            <div class="event-wikipedia-extract">${event.wikipediaInfo.extract}</div>
+                            <div class="event-wikipedia-source">
+                                <a href="${event.wikipediaInfo.url}" target="_blank" rel="noopener noreferrer">
+                                    Читать полную статью на Wikipedia
+                                </a>
+                            </div>
+                        </div>
                         ${event.wikipediaInfo.imageUrl ? `
                             <div class="event-image">
                                 <img src="${event.wikipediaInfo.imageUrl}" alt="${event.title}" loading="lazy">
                             </div>
                         ` : ''}
-                        <div class="event-wikipedia-extract">${event.wikipediaInfo.extract}</div>
-                        <div class="event-wikipedia-source">
-                            <a href="${event.wikipediaInfo.url}" target="_blank" rel="noopener noreferrer">
-                                Читать полную статью на Wikipedia
-                            </a>
-                        </div>
                     </div>
                 ` : ''}
                 
@@ -981,8 +983,8 @@ document.addEventListener('DOMContentLoaded', function() {
             // Берем первый результат поиска
             const pageId = searchData.query.search[0].pageid;
             
-            // Получаем полную информацию о странице
-            const pageUrl = `https://ru.wikipedia.org/w/api.php?action=query&pageids=${pageId}&prop=extracts|pageimages|info&exintro=1&explaintext=1&inprop=url&format=json&origin=*`;
+            // Получаем полную информацию о странице, включая изображения
+            const pageUrl = `https://ru.wikipedia.org/w/api.php?action=query&pageids=${pageId}&prop=extracts|pageimages|images|info&exintro=1&explaintext=1&inprop=url&format=json&origin=*&pithumbsize=1000`;
             const pageResponse = await fetch(pageUrl);
             const pageData = await pageResponse.json();
 
@@ -991,12 +993,63 @@ document.addEventListener('DOMContentLoaded', function() {
                 return null;
             }
 
+            // Получаем лучшее изображение для страницы
+            let bestImageUrl = null;
+            if (page.thumbnail) {
+                // Используем изображение из thumbnail, но в большем размере
+                bestImageUrl = page.thumbnail.source.replace(/\/\d+px-/, '/1000px-');
+            } else if (page.images) {
+                // Если нет thumbnail, ищем подходящее изображение в списке
+                const imagePromises = page.images
+                    .filter(img => !img.title.includes('icon') && !img.title.includes('logo'))
+                    .slice(0, 5) // Берем первые 5 изображений
+                    .map(async img => {
+                        const imageTitle = img.title.replace(/^File:/, '');
+                        const imageInfoUrl = `https://ru.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(imageTitle)}&prop=imageinfo&iiprop=url|size|mime&format=json&origin=*`;
+                        const imageInfoResponse = await fetch(imageInfoUrl);
+                        const imageInfoData = await imageInfoResponse.json();
+                        const imageInfo = Object.values(imageInfoData.query.pages)[0]?.imageinfo?.[0];
+                        
+                        if (imageInfo) {
+                            return {
+                                url: imageInfo.url,
+                                width: imageInfo.width,
+                                height: imageInfo.height,
+                                size: imageInfo.size
+                            };
+                        }
+                        return null;
+                    });
+
+                const imageResults = await Promise.all(imagePromises);
+                const validImages = imageResults.filter(img => img !== null);
+                
+                if (validImages.length > 0) {
+                    // Выбираем изображение с наилучшим соотношением сторон и размером
+                    bestImageUrl = validImages
+                        .sort((a, b) => {
+                            const ratioA = a.width / a.height;
+                            const ratioB = b.width / b.height;
+                            // Предпочитаем изображения с соотношением сторон ближе к 16:9
+                            const targetRatio = 16/9;
+                            const ratioDiffA = Math.abs(ratioA - targetRatio);
+                            const ratioDiffB = Math.abs(ratioB - targetRatio);
+                            
+                            if (Math.abs(ratioDiffA - ratioDiffB) < 0.1) {
+                                // Если соотношения сторон близки, выбираем большее изображение
+                                return b.size - a.size;
+                            }
+                            return ratioDiffA - ratioDiffB;
+                        })[0].url;
+                }
+            }
+
             // Формируем объект с информацией
             const wikiInfo = {
                 title: page.title,
                 extract: page.extract,
                 url: page.fullurl,
-                imageUrl: page.thumbnail?.source || null,
+                imageUrl: bestImageUrl,
                 lastModified: page.touched
             };
 
