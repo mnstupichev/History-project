@@ -26,26 +26,85 @@ document.addEventListener('DOMContentLoaded', function() {
         return {
             event: params.get('event'),
             date: params.get('date'),
-            city: params.get('city')
+            city: params.get('city'),
+            lat: params.get('lat'),
+            lon: params.get('lon')
         };
     }
 
     // Функция для отображения события из URL
     function displayEventFromUrl() {
         const params = getUrlParams();
+        
+        // Сохраняем параметры URL в localStorage для отладки
+        const debugInfo = {
+            timestamp: new Date().toISOString(),
+            url: window.location.href,
+            params: params,
+            processed: APP.hasProcessedUrlParams
+        };
+        localStorage.setItem('lastUrlDebugInfo', JSON.stringify(debugInfo));
+        
+        // Выводим информацию в консоль при каждой загрузке
+        console.group('URL Parameters Debug Info');
+        console.log('Current URL:', window.location.href);
+        console.log('URL Parameters:', params);
+        console.log('Has been processed:', APP.hasProcessedUrlParams);
+        console.log('Last debug info:', JSON.parse(localStorage.getItem('lastUrlDebugInfo') || '{}'));
+        console.groupEnd();
+
         if (!params.event || !params.date || !params.city || APP.hasProcessedUrlParams) {
+            console.log('Skipping URL parameters processing:', {
+                hasEvent: !!params.event,
+                hasDate: !!params.date,
+                hasCity: !!params.city,
+                alreadyProcessed: APP.hasProcessedUrlParams
+            });
             return false;
         }
 
         const cityFromUrl = decodeURIComponent(params.city);
+        console.group('Processing URL Event');
+        console.log('City from URL:', cityFromUrl);
+        console.log('Full parameters:', params);
 
         // Если город из URL отличается от текущего города пользователя,
         // обновляем город пользователя
         if (APP.currentUser && APP.currentUser.city !== cityFromUrl) {
+            console.log('Updating user city from', APP.currentUser.city, 'to', cityFromUrl);
             APP.currentUser.city = cityFromUrl;
             document.getElementById('cityInput').value = cityFromUrl;
             APP.cityWikidataId = null; // Сбрасываем ID города
             localStorage.setItem('currentUser', JSON.stringify(APP.currentUser));
+        }
+
+        // Определяем координаты
+        let coordinates;
+        if (params.lat && params.lon) {
+            try {
+                const lat = parseFloat(params.lat);
+                const lon = parseFloat(params.lon);
+                
+                console.log('Parsing coordinates:', { lat, lon });
+                
+                // Проверяем валидность координат
+                if (isNaN(lat) || isNaN(lon)) {
+                    throw new Error('Invalid coordinate values');
+                }
+                if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+                    throw new Error('Coordinates out of valid range');
+                }
+                
+                coordinates = [lat, lon];
+                console.log('Using coordinates from URL:', coordinates);
+            } catch (error) {
+                console.error('Error parsing coordinates from URL:', error);
+                coordinates = [59.9343, 30.3351]; // Санкт-Петербург как запасной вариант
+                console.log('Using default coordinates for', cityFromUrl);
+            }
+        } else {
+            coordinates = [59.9343, 30.3351]; // Санкт-Петербург как запасной вариант
+            console.log('No coordinates in URL, using default coordinates for', cityFromUrl);
         }
 
         // Создаем событие из параметров URL
@@ -53,8 +112,11 @@ document.addEventListener('DOMContentLoaded', function() {
             title: decodeURIComponent(params.event),
             description: `Историческое событие в городе ${cityFromUrl}`,
             date: decodeURIComponent(params.date),
-            coordinates: [59.9343, 30.3351] // Координаты Санкт-Петербурга по умолчанию
+            coordinates: coordinates
         };
+
+        console.log('Created event object:', event);
+        console.groupEnd();
 
         // Отображаем событие
         APP.currentEvents = [event];
@@ -82,6 +144,16 @@ document.addEventListener('DOMContentLoaded', function() {
         return true;
     }
 
+    // Добавляем функцию для отображения отладочной информации при загрузке страницы
+    function showDebugInfo() {
+        const debugInfo = localStorage.getItem('lastUrlDebugInfo');
+        if (debugInfo) {
+            console.group('Last URL Debug Info (from localStorage)');
+            console.log(JSON.parse(debugInfo));
+            console.groupEnd();
+        }
+    }
+
     // Инициализация приложения
     function init() {
         if (APP.isInitialized) return;
@@ -89,6 +161,7 @@ document.addEventListener('DOMContentLoaded', function() {
         createBaseStructure();
         setupEventHandlers();
         initTimeline();
+        showDebugInfo(); // Добавляем вызов функции отображения отладочной информации
 
         // Проверяем авторизацию
         checkAuth();
@@ -519,45 +592,45 @@ document.addEventListener('DOMContentLoaded', function() {
         while (retryCount < maxRetries) {
             try {
                 // Упрощенный запрос
-                const query = `
-                    SELECT DISTINCT ?event ?eventLabel ?date ?coord ?description WHERE {
+            const query = `
+                SELECT DISTINCT ?event ?eventLabel ?date ?coord ?description WHERE {
                         {
                             # Основной поиск событий в городе
                             ?event wdt:P276 wd:${APP.cityWikidataId};
                                    wdt:P585 ?date.
                         }
                         OPTIONAL { ?event wdt:P625 ?coord. }
-                        OPTIONAL { ?event schema:description ?description. FILTER(LANG(?description) = "ru") }
-                        
+                    OPTIONAL { ?event schema:description ?description. FILTER(LANG(?description) = "ru") }
+                    
                         BIND(YEAR(?date) AS ?year)
                         FILTER(?year >= ${startYear} && ?year <= ${endYear})
                         
-                        FILTER(EXISTS { ?event rdfs:label ?eventLabel. FILTER(LANG(?eventLabel) = "ru") })
-                        
-                        SERVICE wikibase:label { bd:serviceParam wikibase:language "ru". }
-                    }
-                    ORDER BY ?date
-                    LIMIT 100`;
+                    FILTER(EXISTS { ?event rdfs:label ?eventLabel. FILTER(LANG(?eventLabel) = "ru") })
+                    
+                    SERVICE wikibase:label { bd:serviceParam wikibase:language "ru". }
+                }
+                ORDER BY ?date
+                LIMIT 100`;
 
-                const url = `https://query.wikidata.org/sparql?query=${encodeURIComponent(query)}&format=json`;
-                
+            const url = `https://query.wikidata.org/sparql?query=${encodeURIComponent(query)}&format=json`;
+
                 // Добавляем таймаут
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 секунд таймаут
 
                 console.log('Sending Wikidata query, attempt:', retryCount + 1);
-                const response = await fetch(url, { 
+            const response = await fetch(url, {
                     headers: { 'Accept': 'application/json' },
                     signal: controller.signal
-                });
+            });
 
                 clearTimeout(timeoutId);
 
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
 
-                const data = await response.json();
+            const data = await response.json();
                 console.log('Wikidata response received, processing results');
 
                 if (!data || !data.results || !data.results.bindings) {
@@ -566,8 +639,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 const events = await Promise.all(data.results.bindings.map(async item => {
                     try {
-                        const date = new Date(item.date.value);
-                        const coord = item.coord?.value;
+                const date = new Date(item.date.value);
+                const coord = item.coord?.value;
                         const title = item.eventLabel.value;
                         
                         // Добавляем задержку между запросами Wikipedia
@@ -575,11 +648,11 @@ document.addEventListener('DOMContentLoaded', function() {
                         
                         const wikiInfo = await fetchWikipediaInfo(title);
 
-                        return {
+                return {
                             title: title,
-                            description: item.description?.value || 'Описание отсутствует',
-                            date: date.toLocaleDateString('ru-RU'),
-                            coordinates: coord ? parseCoordinates(coord) : null,
+                    description: item.description?.value || 'Описание отсутствует',
+                    date: date.toLocaleDateString('ru-RU'),
+                    coordinates: coord ? parseCoordinates(coord) : null,
                             wikidataUrl: item.event.value,
                             wikipediaInfo: wikiInfo,
                             source: 'wikidata'
@@ -820,7 +893,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     } else {
                         console.log('No results found for query:', query);
                     }
-                } catch (error) {
+        } catch (error) {
                     console.error(`Error processing search query "${query}":`, error);
                 } finally {
                     console.timeEnd('searchQuery');
@@ -923,7 +996,7 @@ document.addEventListener('DOMContentLoaded', function() {
             
             eventElement.innerHTML = `
                 <div class="event-header">
-                    <h4>${event.title}</h4>
+                <h4>${event.title}</h4>
                     <div class="event-date">${event.date}</div>
                 </div>
                 <div class="event-description">${event.description}</div>
@@ -992,7 +1065,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         eventInfoElement.innerHTML = `
             <div class="event-info-content">
-                <h2>${event.title}</h2>
+            <h2>${event.title}</h2>
                 <div class="event-info-date">${event.date}</div>
                 <div class="event-info-description">${event.description}</div>
                 
@@ -1222,7 +1295,7 @@ document.addEventListener('DOMContentLoaded', function() {
             
             startHandle.style.left = `${startPosition}px`;
             endHandle.style.left = `${endPosition}px`;
-            
+
             // Обновляем отображение годов
             document.getElementById('startYear').textContent = APP.timelineStartYear;
             document.getElementById('endYear').textContent = APP.timelineEndYear;

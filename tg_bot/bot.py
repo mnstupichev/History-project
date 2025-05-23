@@ -2,6 +2,8 @@ import html
 import logging
 import requests
 import random
+import asyncio
+import re
 from typing import Dict, Optional, List, Set
 from datetime import datetime, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -13,6 +15,11 @@ from telegram.ext import (
     ContextTypes,
     MessageHandler,
     filters
+)
+from api_utils import (
+    get_combined_events,
+    format_event_message,
+    ERA_RANGES
 )
 
 # Настройка логирования
@@ -72,13 +79,14 @@ async def get_events_from_wikidata(city_id: str, era: str, exclude_events: Set[s
     try:
         range_data = ERA_RANGES[era]
 
-        # SPARQL запрос для получения исторических событий
+        # SPARQL запрос для получения исторических событий с координатами
         query = f"""
-                SELECT ?event ?eventLabel ?date ?description WHERE {{
+                SELECT ?event ?eventLabel ?date ?description ?coord WHERE {{
                   ?event wdt:P31 wd:Q1190554;  # instance of historical event
                         wdt:P585 ?date;        # point in time
                         wdt:P276/wdt:P131* wd:{city_id}. # location (city and its administrative units)
                   OPTIONAL {{ ?event schema:description ?description FILTER(LANG(?description) = "ru") }}
+                  OPTIONAL {{ ?event wdt:P625 ?coord }}  # coordinates
                   FILTER(?date >= "{range_data['start']}-01-01"^^xsd:dateTime)
                   FILTER(?date <= "{range_data['end']}-12-31"^^xsd:dateTime)
                   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "[AUTO_LANGUAGE],ru". }}
@@ -99,6 +107,20 @@ async def get_events_from_wikidata(city_id: str, era: str, exclude_events: Set[s
                 'date': result.get('date', {}).get('value', 'Неизвестная дата'),
                 'description': result.get('description', {}).get('value', '')
             }
+            
+            # Обрабатываем координаты, если они есть
+            if 'coord' in result:
+                coord_value = result['coord']['value']
+                try:
+                    # Парсим координаты из формата Point(lon lat)
+                    match = re.match(r'Point\(([-\d.]+) ([-\d.]+)\)', coord_value)
+                    if match:
+                        lon, lat = map(float, match.groups())
+                        event['coordinates'] = [lat, lon]
+                        logger.info(f"Added coordinates for event {event['label']}: {lat}, {lon}")
+                except Exception as e:
+                    logger.error(f"Error parsing coordinates for event {event['label']}: {e}")
+            
             # Проверяем, не было ли это событие уже показано
             if exclude_events is None or event['label'] not in exclude_events:
                 events.append(event)
@@ -134,25 +156,16 @@ def time_slider_keyboard(current_hour: int = 10) -> InlineKeyboardMarkup:
 
 
 async def get_historical_event(user_id: int) -> str:
-    """Получает историческое событие из Wikidata."""
+    """Получает историческое событие из Wikidata и Wikipedia."""
     try:
         city = user_data[user_id]['city']
         era = user_data[user_id]['era']
-        city_id = user_data[user_id].get('city_id')
-
-        if not city_id:
-            city_id = await get_city_wikidata_id(city)
-            if city_id:
-                user_data[user_id]['city_id'] = city_id
-
-        if not city_id:
-            return f"К сожалению, не удалось найти информацию о городе {city} в базе данных."
 
         # Получаем уже показанные события
         shown_events = user_data[user_id].get('shown_events', set())
 
         # Получаем новые события, исключая уже показанные
-        events = await get_events_from_wikidata(city_id, era, shown_events)
+        events = await get_combined_events(city, era, shown_events)
 
         if not events:
             if shown_events:
@@ -161,39 +174,22 @@ async def get_historical_event(user_id: int) -> str:
 
         # Выбираем случайное событие
         event = random.choice(events)
+        logger.info(f"Selected event for formatting: {event}")
 
         # Добавляем событие в список показанных
         if 'shown_events' not in user_data[user_id]:
             user_data[user_id]['shown_events'] = set()
         user_data[user_id]['shown_events'].add(event['label'])
 
-        # Форматируем дату
-        try:
-            date = datetime.fromisoformat(event['date'].replace('Z', '+00:00'))
-            formatted_date = date.strftime('%d.%m.%Y')
-        except:
-            formatted_date = event['date']
-
-        # Формируем сообщение
-        message = f"<b>📅 {html.escape(formatted_date)}</b>\n\n"
-        message += f"<b>📜 {html.escape(event['label'])}</b>\n"
-
-        if event.get('description'):
-            message += f"\n📝 {html.escape(event['description'])}\n"
-
-        message += f"\n🏙 {html.escape(city)}\n"
-
-        # Формируем скрытую ссылку
-        event_label = requests.utils.quote(event['label'])
-        formatted_date_url = requests.utils.quote(formatted_date)
-        city_url = requests.utils.quote(city)
-        url = f"https://mnstupichev.github.io/History-project/?event={event_label}&date={formatted_date_url}&city={city_url}"
+        # Форматируем сообщение
+        message, url = format_event_message(event, city)
+        logger.info(f"Generated URL: {url}")
         message += f"\n🗺 <a href='{url}'>Событие на карте</a>"
 
         return message
 
     except Exception as e:
-        logger.error(f"Error in get_historical_event: {e}")
+        logger.error(f"Error in get_historical_event: {e}", exc_info=True)
         return "Произошла ошибка при получении исторического события. Пожалуйста, попробуйте позже."
 
 
@@ -202,7 +198,8 @@ async def select_era(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await query.answer()
 
     user = update.effective_user
-    era = query.data.split('_')[1]
+    # Исправляем получение эпохи из callback_data
+    era = query.data.replace('era_', '')  # Убираем префикс 'era_'
 
     user_data[user.id]['era'] = era
     user_data[user.id]['shown_events'] = set()  # Сбрасываем список показанных событий
@@ -214,6 +211,14 @@ async def select_era(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         'soviet': 'Советский период (1917-1991)',
         'modern': 'Наше время (с 1991)'
     }
+
+    if era not in era_names:
+        logger.error(f"Invalid era selected: {era}")
+        await query.edit_message_text(
+            "❌ Произошла ошибка при выборе эпохи. Пожалуйста, попробуйте снова.",
+            reply_markup=eras_keyboard()
+        )
+        return SELECT_ERA
 
     await query.edit_message_text(
         f"✅ Выбрана эпоха: {era_names[era]}",
@@ -325,16 +330,88 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return SELECT_ERA
 
     elif query.data == 'get_event':
-        event = await get_historical_event(query.from_user.id)
-        await query.edit_message_text(
-            f"📜 Историческое событие:\n\n{event}\n\n",
-            parse_mode="HTML",
-            disable_web_page_preview=True,
+        # Показываем индикатор загрузки
+        loading_message = await query.edit_message_text(
+            "⏳ Ищу исторические события...\n\n"
+            "🔍 Проверяю Wikidata...\n"
+            "📚 Ищу в Wikipedia...\n"
+            "📅 Анализирую даты...",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔁 Еще событие", callback_data='get_event')],
-                [InlineKeyboardButton("↩️ В главное меню", callback_data='back')]
+                [InlineKeyboardButton("🔄 Обновить статус", callback_data='loading_status')]
             ])
         )
+
+        # Создаем задачу для обновления статуса загрузки
+        status_messages = [
+            "🔍 Проверяю Wikidata...",
+            "📚 Ищу в Wikipedia...",
+            "📅 Анализирую даты...",
+            "📝 Форматирую результаты...",
+            "⏳ Почти готово..."
+        ]
+        status_index = 0
+
+        async def update_loading_status():
+            nonlocal status_index
+            while True:
+                await asyncio.sleep(2)  # Обновляем каждые 2 секунды
+                if status_index >= len(status_messages):
+                    status_index = 0
+                status_text = "\n".join([
+                    "⏳ Ищу исторические события...\n",
+                    status_messages[status_index]
+                ])
+                try:
+                    await loading_message.edit_text(
+                        status_text,
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔄 Обновить статус", callback_data='loading_status')]
+                        ])
+                    )
+                except Exception as e:
+                    logger.error(f"Error updating loading status: {e}")
+                    break
+                status_index += 1
+
+        # Запускаем обновление статуса в фоне
+        status_task = asyncio.create_task(update_loading_status())
+
+        try:
+            # Получаем событие
+            event = await get_historical_event(query.from_user.id)
+            
+            # Отменяем задачу обновления статуса
+            status_task.cancel()
+            
+            # Показываем результат
+            await loading_message.edit_text(
+                f"📜 Историческое событие:\n\n{event}\n\n",
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔁 Еще событие", callback_data='get_event')],
+                    [InlineKeyboardButton("↩️ В главное меню", callback_data='back')]
+                ])
+            )
+        except Exception as e:
+            # Отменяем задачу обновления статуса
+            status_task.cancel()
+            
+            # Показываем ошибку
+            await loading_message.edit_text(
+                "❌ Произошла ошибка при получении события. Пожалуйста, попробуйте позже.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Попробовать снова", callback_data='get_event')],
+                    [InlineKeyboardButton("↩️ В главное меню", callback_data='back')]
+                ])
+            )
+            logger.error(f"Error getting event: {e}")
+
+        return MAIN_MENU
+
+    elif query.data == 'loading_status':
+        # Обновляем статус загрузки при нажатии кнопки
+        await query.answer("⏳ Продолжаю поиск...")
         return MAIN_MENU
 
     elif query.data == 'subscribe':
@@ -480,31 +557,18 @@ async def send_daily_event(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     try:
-        event = await get_historical_event(user_id)
-        if isinstance(event, str):  # Если вернулась строка с ошибкой
+        event_text = await get_historical_event(user_id)
+        if event_text.startswith("К сожалению") or event_text.startswith("Произошла ошибка"):
             await context.bot.send_message(
                 chat_id=user_id,
-                text=f"❌ {event}",
+                text=f"❌ {event_text}",
                 reply_markup=main_menu_keyboard()
             )
             return
 
-        # Формируем сообщение с правильной структурой данных
-        message = (
-            f"<b>📅 {html.escape(event['date'])}</b>\n\n"
-            f"<b>📜 {html.escape(event['title'])}</b>\n"
-        )
-
-        # Добавляем описание, если оно есть
-        if 'description' in event and event['description']:
-            message += f"\n📝 {html.escape(event['description'])}\n"
-
-        message += f"\n🏙 {html.escape(event['city'])}\n\n"
-        message += f"🗺 <a href='{event['url']}'>Событие на карте</a>"
-
         await context.bot.send_message(
             chat_id=user_id,
-            text=f"📜 Ежедневное историческое событие:\n\n{message}",
+            text=f"📜 Ежедневное историческое событие:\n\n{event_text}",
             parse_mode='HTML',
             disable_web_page_preview=True,
             reply_markup=InlineKeyboardMarkup([
