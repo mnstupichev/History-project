@@ -459,14 +459,26 @@ document.addEventListener('DOMContentLoaded', function() {
     async function fetchHistoricalEvents(startYear, endYear) {
         if (!APP.cityWikidataId) return [];
 
+        console.time('Total fetch time');
         try {
+            console.log('Starting fetchHistoricalEvents:', { startYear, endYear, city: APP.currentUser.city });
+            
             // Получаем события из Wikidata
+            console.time('Wikidata fetch');
+            console.log('Fetching Wikidata events...');
             const wikidataEvents = await fetchWikidataEvents(startYear, endYear);
+            console.timeEnd('Wikidata fetch');
+            console.log('Wikidata events found:', wikidataEvents.length);
             
             // Получаем события из Wikipedia
+            console.time('Wikipedia fetch');
+            console.log('Fetching Wikipedia events...');
             const wikipediaEvents = await fetchWikipediaEvents(APP.currentUser.city, startYear, endYear);
+            console.timeEnd('Wikipedia fetch');
+            console.log('Wikipedia events found:', wikipediaEvents.length);
             
             // Объединяем события, избегая дубликатов
+            console.time('Merge events');
             const allEvents = [...wikidataEvents];
             
             // Добавляем уникальные события из Wikipedia
@@ -474,7 +486,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const isDuplicate = allEvents.some(event => 
                     event.title === wikiEvent.title || 
                     (event.date === wikiEvent.date && 
-                     Math.abs(new Date(event.date) - new Date(wikiEvent.date)) < 86400000) // 1 день в миллисекундах
+                     Math.abs(new Date(event.date) - new Date(wikiEvent.date)) < 86400000)
                 );
                 
                 if (!isDuplicate) {
@@ -483,120 +495,191 @@ document.addEventListener('DOMContentLoaded', function() {
             });
 
             // Сортируем все события по дате
-            return allEvents.sort((a, b) => new Date(a.date) - new Date(b.date));
+            const sortedEvents = allEvents.sort((a, b) => new Date(a.date) - new Date(b.date));
+            console.timeEnd('Merge events');
+            console.log('Total unique events after merge:', sortedEvents.length);
+            
+            console.timeEnd('Total fetch time');
+            return sortedEvents;
         } catch (error) {
-            console.error('Error fetching events:', error);
+            console.error('Error in fetchHistoricalEvents:', error);
+            console.timeEnd('Total fetch time');
             throw new Error('Не удалось загрузить события. Проверьте подключение к интернету и попробуйте снова.');
         }
     }
 
     // Получение событий из Wikidata
     async function fetchWikidataEvents(startYear, endYear) {
-        const query = `
-            SELECT DISTINCT ?event ?eventLabel ?date ?coord ?description WHERE {
-                {
-                    # События, произошедшие в городе
-                    ?event wdt:P276/wdt:P131* wd:${APP.cityWikidataId};
-                           wdt:P585 ?date.
-                } UNION {
-                    # События, связанные с городом через другие свойства
-                    ?event wdt:P276/wdt:P131* wd:${APP.cityWikidataId};
-                           wdt:P585 ?date.
-                    ?event wdt:P276 ?location.
-                    ?location wdt:P131* wd:${APP.cityWikidataId}.
-                } UNION {
-                    # События, упоминающие город в описании
-                    ?event wdt:P585 ?date;
-                           schema:description ?description.
-                    FILTER(CONTAINS(LCASE(?description), LCASE("${APP.currentUser.city}")))
+        console.time('Wikidata fetch');
+        console.log('Starting Wikidata fetch for:', { startYear, endYear, cityId: APP.cityWikidataId });
+
+        const maxRetries = 3;
+        let retryCount = 0;
+
+        while (retryCount < maxRetries) {
+            try {
+                // Упрощенный запрос
+                const query = `
+                    SELECT DISTINCT ?event ?eventLabel ?date ?coord ?description WHERE {
+                        {
+                            # Основной поиск событий в городе
+                            ?event wdt:P276 wd:${APP.cityWikidataId};
+                                   wdt:P585 ?date.
+                        }
+                        OPTIONAL { ?event wdt:P625 ?coord. }
+                        OPTIONAL { ?event schema:description ?description. FILTER(LANG(?description) = "ru") }
+                        
+                        BIND(YEAR(?date) AS ?year)
+                        FILTER(?year >= ${startYear} && ?year <= ${endYear})
+                        
+                        FILTER(EXISTS { ?event rdfs:label ?eventLabel. FILTER(LANG(?eventLabel) = "ru") })
+                        
+                        SERVICE wikibase:label { bd:serviceParam wikibase:language "ru". }
+                    }
+                    ORDER BY ?date
+                    LIMIT 100`;
+
+                const url = `https://query.wikidata.org/sparql?query=${encodeURIComponent(query)}&format=json`;
+                
+                // Добавляем таймаут
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 секунд таймаут
+
+                console.log('Sending Wikidata query, attempt:', retryCount + 1);
+                const response = await fetch(url, { 
+                    headers: { 'Accept': 'application/json' },
+                    signal: controller.signal
+                });
+
+                clearTimeout(timeoutId);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
                 }
-                
-                OPTIONAL { ?event wdt:P625 ?coord. }
-                OPTIONAL { ?event schema:description ?description. FILTER(LANG(?description) = "ru") }
-                
-                # Более гибкая фильтрация по дате
-                BIND(YEAR(?date) AS ?year)
-                FILTER(?year >= ${startYear} && ?year <= ${endYear})
-                
-                # Проверяем наличие русского названия
-                FILTER(EXISTS { ?event rdfs:label ?eventLabel. FILTER(LANG(?eventLabel) = "ru") })
-                
-                SERVICE wikibase:label { bd:serviceParam wikibase:language "ru". }
+
+                const data = await response.json();
+                console.log('Wikidata response received, processing results');
+
+                if (!data || !data.results || !data.results.bindings) {
+                    throw new Error('Invalid Wikidata response format');
+                }
+
+                const events = await Promise.all(data.results.bindings.map(async item => {
+                    try {
+                        const date = new Date(item.date.value);
+                        const coord = item.coord?.value;
+                        const title = item.eventLabel.value;
+                        
+                        // Добавляем задержку между запросами Wikipedia
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                        
+                        const wikiInfo = await fetchWikipediaInfo(title);
+
+                        return {
+                            title: title,
+                            description: item.description?.value || 'Описание отсутствует',
+                            date: date.toLocaleDateString('ru-RU'),
+                            coordinates: coord ? parseCoordinates(coord) : null,
+                            wikidataUrl: item.event.value,
+                            wikipediaInfo: wikiInfo,
+                            source: 'wikidata'
+                        };
+                    } catch (error) {
+                        console.error('Error processing Wikidata item:', error);
+                        return null;
+                    }
+                }));
+
+                // Фильтруем null значения
+                const validEvents = events.filter(event => event !== null);
+                console.log('Wikidata events processed:', validEvents.length);
+                console.timeEnd('Wikidata fetch');
+                return validEvents;
+
+            } catch (error) {
+                retryCount++;
+                console.error(`Wikidata fetch attempt ${retryCount} failed:`, error);
+
+                if (error.name === 'AbortError') {
+                    console.log('Wikidata query timed out');
+                }
+
+                if (retryCount === maxRetries) {
+                    console.error('All Wikidata fetch attempts failed');
+                    throw new Error('Не удалось получить данные из Wikidata. Попробуйте позже.');
+                }
+
+                // Ждем перед следующей попыткой
+                await new Promise(resolve => setTimeout(resolve, 2000 * retryCount));
             }
-            ORDER BY ?date
-            LIMIT 200`;
-
-        const url = `https://query.wikidata.org/sparql?query=${encodeURIComponent(query)}&format=json`;
-        const response = await fetch(url, { headers: { 'Accept': 'application/json' } });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
         }
-
-        const data = await response.json();
-        return await Promise.all(data.results.bindings.map(async item => {
-            const date = new Date(item.date.value);
-            const coord = item.coord?.value;
-            const title = item.eventLabel.value;
-            const wikiInfo = await fetchWikipediaInfo(title);
-
-            return {
-                title: title,
-                description: item.description?.value || 'Описание отсутствует',
-                date: date.toLocaleDateString('ru-RU'),
-                coordinates: coord ? parseCoordinates(coord) : null,
-                wikidataUrl: item.event.value,
-                wikipediaInfo: wikiInfo,
-                source: 'wikidata'
-            };
-        }));
     }
 
     // Получение событий из Wikipedia
     async function fetchWikipediaEvents(city, startYear, endYear) {
+        console.time('Wikipedia events total');
         try {
             const events = [];
             const processedTitles = new Set();
             const processedPageIds = new Set();
 
-            // Функция для получения информации о страницах одним запросом
-            async function fetchPagesInfo(pageIds) {
-                if (!pageIds.length) return [];
-                const pagesUrl = `https://ru.wikipedia.org/w/api.php?action=query&pageids=${pageIds.join('|')}&prop=extracts|pageimages|info|categories&exintro=1&explaintext=1&inprop=url&format=json&origin=*&cllimit=50`;
-                const response = await fetch(pagesUrl);
-                const data = await response.json();
-                return Object.values(data.query.pages);
-            }
-
             // Функция для получения связанных статей
             async function fetchRelatedArticles(pageId) {
+                console.time('fetchRelatedArticles');
+                console.log('Fetching related articles for page:', pageId);
                 const relatedUrl = `https://ru.wikipedia.org/w/api.php?action=query&pageids=${pageId}&prop=links&pllimit=500&format=json&origin=*`;
                 const response = await fetch(relatedUrl);
                 const data = await response.json();
-                return data.query?.pages[pageId]?.links || [];
+                const links = data.query?.pages[pageId]?.links || [];
+                console.log('Found related articles:', links.length);
+                console.timeEnd('fetchRelatedArticles');
+                return links;
             }
 
             // Функция для обработки одной страницы
             async function processPage(page) {
-                if (processedPageIds.has(page.pageid) || processedTitles.has(page.title)) return;
+                console.time('processPage');
+                console.log('Processing page:', page.title);
+                
+                if (processedPageIds.has(page.pageid) || processedTitles.has(page.title)) {
+                    console.log('Page already processed, skipping:', page.title);
+                    console.timeEnd('processPage');
+                    return;
+                }
                 
                 processedPageIds.add(page.pageid);
                 processedTitles.add(page.title);
 
                 // Проверяем категории и связь с городом
-                const categories = page.categories?.map(cat => cat.title.toLowerCase()) || [];
+                const categories = Array.isArray(page.categories) 
+                    ? page.categories.map(cat => cat?.title?.toLowerCase() || '').filter(Boolean)
+                    : [];
+                
                 const isHistorical = categories.some(cat => 
-                    cat.includes('история') || 
-                    cat.includes('события') || 
-                    cat.includes('даты') ||
-                    cat.includes('хронология')
+                    cat && (
+                        cat.includes('история') || 
+                        cat.includes('события') || 
+                        cat.includes('даты') ||
+                        cat.includes('хронология')
+                    )
                 );
 
                 const isCityRelated = 
-                    categories.some(cat => cat.toLowerCase().includes(city.toLowerCase())) ||
-                    page.extract.toLowerCase().includes(city.toLowerCase());
+                    (categories.some(cat => cat && cat.includes(city.toLowerCase()))) ||
+                    (page.extract && page.extract.toLowerCase().includes(city.toLowerCase()));
 
-                if (!isHistorical || !isCityRelated) return;
+                if (!isHistorical || !isCityRelated) {
+                    console.log('Page not relevant:', { 
+                        title: page.title, 
+                        isHistorical, 
+                        isCityRelated,
+                        categories: categories.length > 0 ? categories : 'no categories'
+                    });
+                    console.timeEnd('processPage');
+                    return;
+                }
+
+                console.log('Page is relevant, searching for dates');
 
                 // Ищем даты в тексте
                 const datePatterns = [
@@ -635,9 +718,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 }
 
+                console.log('Found dates:', dates.size);
+
                 if (dates.size > 0) {
-                    // Получаем изображение для события
+                    console.time('fetchWikipediaInfo');
+                    console.log('Fetching Wikipedia info for:', page.title);
                     const wikiInfo = await fetchWikipediaInfo(page.title);
+                    console.timeEnd('fetchWikipediaInfo');
 
                     // Создаем событие для каждой найденной даты
                     for (const date of dates) {
@@ -652,10 +739,21 @@ document.addEventListener('DOMContentLoaded', function() {
                         });
                     }
 
+                    // Добавляем задержку перед поиском связанных статей
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+
+                    console.log('Processing related articles');
                     // Ищем связанные статьи
                     const relatedLinks = await fetchRelatedArticles(page.pageid);
+                    console.log('Found related links:', relatedLinks.length);
+
+                    // Обрабатываем связанные статьи с задержкой
                     for (const link of relatedLinks) {
                         if (!processedTitles.has(link.title)) {
+                            console.log('Fetching related page:', link.title);
+                            // Добавляем задержку между запросами
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                            
                             const relatedPageUrl = `https://ru.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(link.title)}&prop=extracts|pageimages|info|categories&exintro=1&explaintext=1&inprop=url&format=json&origin=*&cllimit=50`;
                             const relatedResponse = await fetch(relatedPageUrl);
                             const relatedData = await relatedResponse.json();
@@ -667,7 +765,15 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                     }
                 }
+
+                console.timeEnd('processPage');
             }
+
+            console.log('Starting Wikipedia search with queries:', {
+                city,
+                startYear,
+                endYear
+            });
 
             // Начальный поиск
             const searchQueries = [
@@ -680,28 +786,77 @@ document.addEventListener('DOMContentLoaded', function() {
             // Собираем все найденные pageIds
             const allPageIds = new Set();
             for (const query of searchQueries) {
-                const searchUrl = `https://ru.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&origin=*&srlimit=50`;
-                const searchResponse = await fetch(searchUrl);
-                const searchData = await searchResponse.json();
+                try {
+                    console.time('searchQuery');
+                    console.log('Searching with query:', query);
 
-                if (searchData.query?.search?.length) {
-                    searchData.query.search.forEach(result => allPageIds.add(result.pageid));
+                    // Добавляем задержку между поисковыми запросами
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+
+                    const searchUrl = `https://ru.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&origin=*&srlimit=50`;
+                    const searchResponse = await fetch(searchUrl);
+                    
+                    if (!searchResponse.ok) {
+                        console.error(`Search query failed for "${query}":`, searchResponse.status);
+                        continue;
+                    }
+
+                    const searchData = await searchResponse.json();
+
+                    // Проверяем наличие ошибки в ответе
+                    if (searchData.error) {
+                        console.error('Wikipedia API search error:', searchData.error);
+                        if (searchData.error.code === 'ratelimited') {
+                            console.log('Rate limited, waiting 5 seconds...');
+                            await new Promise(resolve => setTimeout(resolve, 5000));
+                            continue;
+                        }
+                        continue;
+                    }
+
+                    if (searchData.query?.search?.length) {
+                        console.log('Found results:', searchData.query.search.length);
+                        searchData.query.search.forEach(result => allPageIds.add(result.pageid));
+                    } else {
+                        console.log('No results found for query:', query);
+                    }
+                } catch (error) {
+                    console.error(`Error processing search query "${query}":`, error);
+                } finally {
+                    console.timeEnd('searchQuery');
                 }
             }
 
-            // Получаем информацию о всех найденных страницах одним запросом
+            console.log('Total unique pageIds found:', allPageIds.size);
+
+            if (allPageIds.size === 0) {
+                console.log('No pages found in Wikipedia search');
+                console.timeEnd('Wikipedia events total');
+                return events;
+            }
+
+            // Получаем информацию о всех найденных страницах
             const pages = await fetchPagesInfo(Array.from(allPageIds));
+            console.log('Processing pages:', pages.length);
             
             // Обрабатываем каждую страницу
             for (const page of pages) {
-                if (!page.missing) {
-                    await processPage(page);
+                try {
+                    if (!page.missing) {
+                        await processPage(page);
+                    }
+                } catch (error) {
+                    console.error('Error processing page:', page.title, error);
                 }
             }
 
+            console.log('Wikipedia events processing complete. Total events found:', events.length);
+            console.timeEnd('Wikipedia events total');
             return events;
+
         } catch (error) {
-            console.error('Error fetching Wikipedia events:', error);
+            console.error('Error in fetchWikipediaEvents:', error);
+            console.timeEnd('Wikipedia events total');
             return [];
         }
     }
@@ -1173,41 +1328,71 @@ document.addEventListener('DOMContentLoaded', function() {
         const buttons = document.querySelectorAll('button');
         buttons.forEach(btn => {
             btn.disabled = show;
-            if (btn.id === 'applySettingsBtn' && show) {
-                btn.innerHTML = '<span class="loading"></span>';
-            } else if (btn.id === 'applySettingsBtn') {
-                btn.textContent = 'Применить';
+            if (btn.id === 'applySettingsBtn') {
+                if (show) {
+                    btn.innerHTML = `
+                        <div class="loading-container">
+                            <div class="loading-bar">
+                                <div class="loading-progress"></div>
+                            </div>
+                            <span class="loading-text">Загрузка...</span>
+                        </div>
+                    `;
+                    // Запускаем анимацию прогресс-бара
+                    const progressBar = btn.querySelector('.loading-progress');
+                    if (progressBar) {
+                        progressBar.style.animation = 'loading 2s infinite';
+                    }
+                } else {
+                    btn.innerHTML = 'Применить';
+                }
             }
         });
     }
 
     // Функция для получения информации из Wikipedia
     async function fetchWikipediaInfo(title) {
+        console.time('fetchWikipediaInfo');
+        console.log('Fetching Wikipedia info for:', title);
+        
         // Проверяем кэш
         if (APP.wikipediaCache.has(title)) {
+            console.log('Using cached info for:', title);
+            console.timeEnd('fetchWikipediaInfo');
             return APP.wikipediaCache.get(title);
         }
 
         try {
             // Сначала ищем страницу по названию
+            console.time('searchPage');
+            console.log('Searching page:', title);
             const searchUrl = `https://ru.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(title)}&format=json&origin=*`;
             const searchResponse = await fetch(searchUrl);
             const searchData = await searchResponse.json();
+            console.timeEnd('searchPage');
 
             if (!searchData.query?.search?.length) {
+                console.log('No search results found for:', title);
+                console.timeEnd('fetchWikipediaInfo');
                 return null;
             }
 
             // Берем первый результат поиска
             const pageId = searchData.query.search[0].pageid;
+            console.log('Found pageId:', pageId);
             
             // Получаем основную информацию о странице
+            console.time('fetchPageInfo');
+            console.log('Fetching page info for pageId:', pageId);
             const pageUrl = `https://ru.wikipedia.org/w/api.php?action=query&pageids=${pageId}&prop=extracts|pageimages|images|info&exintro=1&explaintext=1&inprop=url&format=json&origin=*&pithumbsize=1000`;
             const pageResponse = await fetch(pageUrl);
             const pageData = await pageResponse.json();
+            console.timeEnd('fetchPageInfo');
 
             const page = pageData.query.pages[pageId];
             if (!page) {
+                console.log('No page data found for pageId:', pageId);
+                console.timeEnd('fetchWikipediaInfo');
                 return null;
             }
 
@@ -1222,16 +1407,20 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Если есть thumbnail, используем его
             if (page.thumbnail) {
+                console.log('Using thumbnail for:', title);
                 wikiInfo.imageUrl = page.thumbnail.source.replace(/\/\d+px-/, '/1000px-');
             }
             // Если нет thumbnail, ищем изображения
             else if (page.images) {
+                console.time('fetchImages');
+                console.log('Searching images for:', title);
                 // Берем первые 3 изображения для оптимизации
                 const imagePromises = page.images
                     .filter(img => !img.title.includes('icon') && !img.title.includes('logo'))
                     .slice(0, 3)
                     .map(async img => {
                         const imageTitle = img.title.replace(/^File:/, '');
+                        console.log('Fetching image info:', imageTitle);
                         const imageInfoUrl = `https://ru.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(imageTitle)}&prop=imageinfo&iiprop=url|size|mime&format=json&origin=*`;
                         const imageInfoResponse = await fetch(imageInfoUrl);
                         const imageInfoData = await imageInfoResponse.json();
@@ -1250,6 +1439,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 const imageResults = await Promise.all(imagePromises);
                 const validImages = imageResults.filter(img => img !== null);
+                console.log('Found valid images:', validImages.length);
+                console.timeEnd('fetchImages');
                 
                 if (validImages.length > 0) {
                     // Выбираем изображение с наилучшим соотношением сторон
@@ -1264,11 +1455,104 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             // Сохраняем в кэш
+            console.log('Caching info for:', title);
             APP.wikipediaCache.set(title, wikiInfo);
+            console.timeEnd('fetchWikipediaInfo');
             return wikiInfo;
         } catch (error) {
-            console.error('Error fetching Wikipedia info:', error);
+            console.error('Error in fetchWikipediaInfo:', error);
+            console.timeEnd('fetchWikipediaInfo');
             return null;
+        }
+    }
+
+    // Функция для получения информации о страницах одним запросом
+    async function fetchPagesInfo(pageIds) {
+        console.time('fetchPagesInfo');
+        console.log('Fetching info for pages:', pageIds.length);
+        
+        if (!pageIds.length) {
+            console.log('No pageIds provided');
+            console.timeEnd('fetchPagesInfo');
+            return [];
+        }
+
+        try {
+            // Разбиваем pageIds на группы по 35 для оптимизации запросов
+            const pageIdGroups = [];
+            for (let i = 0; i < pageIds.length; i += 35) {
+                pageIdGroups.push(pageIds.slice(i, i + 35));
+            }
+
+            console.log(`Split ${pageIds.length} pageIds into ${pageIdGroups.length} groups of up to 35 pages each`);
+
+            const allPages = [];
+            for (const group of pageIdGroups) {
+                try {
+                    const pagesUrl = `https://ru.wikipedia.org/w/api.php?action=query&pageids=${group.join('|')}&prop=extracts|pageimages|info|categories&exintro=1&explaintext=1&inprop=url&format=json&origin=*&cllimit=50`;
+                    console.log('Fetching Wikipedia pages group:', group.length, 'pages');
+
+                    // Добавляем задержку между запросами (оставляем 1 секунду для безопасности)
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+
+                    const response = await fetch(pagesUrl);
+                    if (!response.ok) {
+                        console.error(`HTTP error for group: ${response.status}`);
+                        continue;
+                    }
+
+                    const data = await response.json();
+                    console.log('Wikipedia API response received for group');
+
+                    // Проверяем наличие ошибки в ответе
+                    if (data.error) {
+                        console.error('Wikipedia API error:', data.error);
+                        // Если это ошибка ограничения запросов, ждем подольше
+                        if (data.error.code === 'ratelimited') {
+                            console.log('Rate limited, waiting 5 seconds...');
+                            await new Promise(resolve => setTimeout(resolve, 5000));
+                            continue;
+                        }
+                        continue;
+                    }
+
+                    // Проверяем структуру ответа
+                    if (!data.query) {
+                        console.error('Invalid Wikipedia API response structure:', data);
+                        continue;
+                    }
+
+                    // Проверяем наличие pages в ответе
+                    if (!data.query.pages) {
+                        console.error('No pages in Wikipedia API response:', data);
+                        continue;
+                    }
+
+                    // Преобразуем объект pages в массив и добавляем в общий результат
+                    const pages = Object.values(data.query.pages);
+                    console.log('Successfully processed pages in group:', pages.length);
+                    
+                    // Фильтруем отсутствующие страницы
+                    const validPages = pages.filter(page => !page.missing);
+                    console.log('Valid pages found in group:', validPages.length);
+
+                    allPages.push(...validPages);
+
+                } catch (error) {
+                    console.error('Error processing page group:', error);
+                    // Продолжаем с следующей группой
+                    continue;
+                }
+            }
+
+            console.log('Total valid pages found:', allPages.length);
+            console.timeEnd('fetchPagesInfo');
+            return allPages;
+
+        } catch (error) {
+            console.error('Error in fetchPagesInfo:', error);
+            console.timeEnd('fetchPagesInfo');
+            return [];
         }
     }
 
